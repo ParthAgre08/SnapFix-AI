@@ -1,20 +1,61 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import { motion } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { Edit2, MapPin, Mail, AlertTriangle, CheckCircle2, Clock, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+
 export default function Profile() {
   const { user } = useApp();
   const navigate = useNavigate();
+  const [stats, setStats] = useState([
+    { label: 'Reported Issues', value: '—', icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50' },
+    { label: 'Resolved Issues', value: '—', icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+    { label: 'Pending Issues', value: '—', icon: Clock, color: 'text-blue-500', bg: 'bg-blue-50' },
+  ]);
+  const [loadingStats, setLoadingStats] = useState(false);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const fetchStats = async () => {
+      setLoadingStats(true);
+      try {
+        const response = await axios.get(`${API_BASE_URL}/profile/stats`, {
+          params: { uid: user.uid }
+        });
+
+        if (response.data.success) {
+          setStats([
+            { label: 'Reported Issues', value: response.data.reported ?? 0, icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50' },
+            { label: 'Resolved Issues', value: response.data.resolved ?? 0, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+            { label: 'Pending Issues', value: response.data.pending ?? 0, icon: Clock, color: 'text-blue-500', bg: 'bg-blue-50' },
+          ]);
+        } else {
+          setStats([
+            { label: 'Reported Issues', value: 0, icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50' },
+            { label: 'Resolved Issues', value: 0, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+            { label: 'Pending Issues', value: 0, icon: Clock, color: 'text-blue-500', bg: 'bg-blue-50' },
+          ]);
+        }
+      } catch (error) {
+        console.error('Failed to fetch profile stats', error);
+        setStats([
+          { label: 'Reported Issues', value: '—', icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50' },
+          { label: 'Resolved Issues', value: '—', icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+          { label: 'Pending Issues', value: '—', icon: Clock, color: 'text-blue-500', bg: 'bg-blue-50' },
+        ]);
+      } finally {
+        setLoadingStats(false);
+      }
+    };
+
+    fetchStats();
+  }, [user?.uid]);
 
   if (!user) return null;
-
-  const stats = [
-    { label: 'Reported Issues', value: user.issuesReported || 0, icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50' },
-    { label: 'Resolved Issues', value: user.issuesResolved || 0, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-    { label: 'Pending Issues', value: user.issuesPending || 0, icon: Clock, color: 'text-blue-500', bg: 'bg-blue-50' },
-  ];
 
   return (
     <div className="min-h-screen bg-gray-50 pt-24 pb-12 px-4 sm:px-6 lg:px-8">
@@ -78,7 +119,7 @@ export default function Profile() {
                 <stat.icon className="w-8 h-8" />
               </div>
               <div>
-                <p className="text-3xl font-bold text-gray-900">{stat.value}</p>
+                <p className="text-3xl font-bold text-gray-900">{loadingStats ? '…' : stat.value}</p>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{stat.label}</p>
               </div>
             </div>

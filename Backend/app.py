@@ -99,6 +99,49 @@ def sync_user():
         cursor.close()
         conn.close()
 
+@app.route('/profile/stats', methods=['GET'])
+def profile_stats():
+    uid = request.args.get('uid')
+    if not uid and request.is_json:
+        uid = request.json.get('uid')
+
+    if not uid:
+        return jsonify({"success": False, "message": "Firebase UID is required"}), 400
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (uid,))
+        user = cursor.fetchone()
+
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 200
+
+        user_id = user['id']
+        cursor.execute("""
+            SELECT
+                COUNT(*) AS reported,
+                SUM(CASE WHEN status IN ('Pending', 'Under Review', 'Assigned', 'In Progress') THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status = 'Resolved' THEN 1 ELSE 0 END) AS resolved
+            FROM reports
+            WHERE user_id = %s
+        """, (user_id,))
+        stats = cursor.fetchone()
+
+        return jsonify({
+            "success": True,
+            "reported": int(stats['reported'] or 0),
+            "pending": int(stats['pending'] or 0),
+            "resolved": int(stats['resolved'] or 0)
+        })
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
 @app.route('/submit-issue', methods=['POST'])
 def submit_issue():
     if 'image' not in request.files:
