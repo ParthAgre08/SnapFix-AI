@@ -429,7 +429,7 @@ export default function OfficerDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      
+
       {/* Toast Alert */}
       <AnimatePresence>
         {toastMessage && (
@@ -514,7 +514,7 @@ export default function OfficerDashboard() {
                         if (n.type === 'high_priority') typeColor = 'text-red-500 bg-red-500/10';
                         if (n.type === 'duplicate') typeColor = 'text-violet-500 bg-violet-500/10 font-bold';
                         if (n.type === 'resolved') typeColor = 'text-emerald-500 bg-emerald-500/10';
-                        
+
                         return (
                           <div
                             key={n.id}
@@ -582,7 +582,7 @@ export default function OfficerDashboard() {
 
       {/* Workspace Area */}
       <div className="flex flex-1 overflow-hidden">
-        
+
         {/* Sidebar Navigation */}
         <aside className="w-64 bg-slate-950/50 border-r border-slate-800/80 p-4 hidden md:flex flex-col gap-1 shrink-0">
           <div className="px-3 mb-4">
@@ -608,11 +608,10 @@ export default function OfficerDashboard() {
                   setActiveTab(item.name);
                   setSelectedReportId(null);
                 }}
-                className={`flex items-center justify-between w-full px-4 py-3.5 rounded-2xl text-sm font-semibold transition-all cursor-pointer ${
-                  isActive
+                className={`flex items-center justify-between w-full px-4 py-3.5 rounded-2xl text-sm font-semibold transition-all cursor-pointer ${isActive
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10'
                     : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-100'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <Icon className="h-4 w-4 shrink-0" />
@@ -620,9 +619,8 @@ export default function OfficerDashboard() {
                 </div>
                 {item.count !== undefined && item.count > 0 && (
                   <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      isActive ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-300'
-                    }`}
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-300'
+                      }`}
                   >
                     {item.count}
                   </span>
@@ -641,11 +639,11 @@ export default function OfficerDashboard() {
             </div>
           ) : (
             <div className="space-y-6 flex-1 flex flex-col">
-              
+
               {/* Dashboard Content */}
               {activeTab === 'Dashboard' && (
                 <div className="space-y-8 flex-1">
-                  
+
                   {/* Title Bar */}
                   <div>
                     <h1 className="text-2xl font-bold font-display text-white">Pune Municipal Operations</h1>
@@ -732,10 +730,10 @@ export default function OfficerDashboard() {
               {/* Lists (Reported, In Progress, Resolved) */}
               {(activeTab === 'Reported Issues' || activeTab === 'In Progress' || activeTab === 'Resolved Issues') && (
                 <div className="flex-1 flex gap-6 overflow-hidden">
-                  
+
                   {/* Left Column: Filterable List */}
                   <div className="w-[45%] flex flex-col gap-4 overflow-y-auto pr-2">
-                    
+
                     {/* List Title */}
                     <div>
                       <h1 className="text-2xl font-bold text-white font-display">{activeTab}</h1>
@@ -796,11 +794,10 @@ export default function OfficerDashboard() {
                           <div
                             key={report.id}
                             onClick={() => setSelectedReportId(report.id)}
-                            className={`border rounded-2xl p-4 flex gap-4 cursor-pointer hover:border-slate-700 transition-all text-left ${
-                              selectedReportId === report.id
+                            className={`border rounded-2xl p-4 flex gap-4 cursor-pointer hover:border-slate-700 transition-all text-left ${selectedReportId === report.id
                                 ? 'bg-blue-500/10 border-blue-500'
                                 : 'bg-slate-950/20 border-slate-800/80'
-                            }`}
+                              }`}
                           >
                             {/* Issue Thumbnail */}
                             <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-800 shrink-0 relative">
@@ -827,11 +824,10 @@ export default function OfficerDashboard() {
                                     #{report.id}: {report.issue_type}
                                   </h3>
                                   <span
-                                    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                      report.severity === 'Critical' || report.severity === 'High'
+                                    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${report.severity === 'Critical' || report.severity === 'High'
                                         ? 'bg-red-500/20 text-red-400'
                                         : 'bg-amber-500/20 text-amber-400'
-                                    }`}
+                                      }`}
                                   >
                                     {report.severity}
                                   </span>
@@ -912,7 +908,7 @@ export default function OfficerDashboard() {
                       </div>
                     ) : selectedReport ? (
                       <div className="flex-1 flex flex-col overflow-y-auto">
-                        
+
                         {/* Images comparison section */}
                         {selectedReport.status === 'Resolved' ? (
                           <div className="grid grid-cols-3 gap-[1px] bg-slate-800 h-60 shrink-0 relative">
@@ -995,7 +991,7 @@ export default function OfficerDashboard() {
 
                         {/* Content section */}
                         <div className="p-6 space-y-6 flex-1">
-                          
+
                           {/* Heading info */}
                           <div>
                             <div className="flex justify-between items-start gap-4">
@@ -1003,13 +999,12 @@ export default function OfficerDashboard() {
                                 {selectedReport.ai_title || `Report #${selectedReport.id}`}
                               </h2>
                               <span
-                                className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-full shrink-0 border ${
-                                  selectedReport.status === 'Resolved'
+                                className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-full shrink-0 border ${selectedReport.status === 'Resolved'
                                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
                                     : selectedReport.status === 'In Progress'
-                                    ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                                    : 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-                                }`}
+                                      ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                      : 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                                  }`}
                               >
                                 {selectedReport.status}
                               </span>
@@ -1105,7 +1100,7 @@ export default function OfficerDashboard() {
                           {/* Resolution Info (Visible on Resolved Issues tab) */}
                           {activeTab === 'Resolved Issues' && (
                             <div className="space-y-6 pt-4 border-t border-slate-800">
-                              
+
                               {/* Resolution Summary */}
                               <div className="bg-emerald-950/20 border border-emerald-900/40 p-5 rounded-2xl space-y-2.5">
                                 <div className="flex justify-between items-center">
@@ -1304,7 +1299,7 @@ export default function OfficerDashboard() {
                 </div>
               )}
 
-                        {/* Department Analytics Tab */}
+              {/* Department Analytics Tab */}
               {activeTab === 'Department Analytics' && (
                 <div className="space-y-8 flex-1">
                   <div>
@@ -1490,8 +1485,8 @@ export default function OfficerDashboard() {
                               <AreaChart data={analyticsData.monthly_trend}>
                                 <defs>
                                   <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                                   </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />

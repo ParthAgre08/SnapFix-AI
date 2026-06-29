@@ -60,17 +60,17 @@ export default function Profile() {
   return (
     <div className="min-h-screen bg-gray-50 pt-24 pb-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto space-y-8">
-        
+
         {/* Back navigation */}
-        <button 
-          onClick={() => navigate('/')} 
+        <button
+          onClick={() => navigate('/')}
           className="flex items-center text-sm text-gray-500 hover:text-primary transition-colors"
         >
           <ArrowLeft className="w-4 h-4 mr-1" /> Back to Home
         </button>
 
         {/* Profile Header Card */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden"
@@ -78,9 +78,9 @@ export default function Profile() {
           <div className="h-32 bg-gradient-to-r from-primary/20 to-primary/5"></div>
           <div className="px-8 pb-8">
             <div className="relative flex justify-between items-end -mt-16 mb-6">
-              <img 
-                src={user.photoURL} 
-                alt={user.name} 
+              <img
+                src={user.photoURL}
+                alt={user.name}
                 className="w-32 h-32 rounded-full border-4 border-white shadow-lg object-cover bg-white"
                 referrerPolicy="no-referrer"
               />
@@ -89,7 +89,7 @@ export default function Profile() {
                 Edit Profile
               </button>
             </div>
-            
+
             <div className="space-y-1">
               <h1 className="text-3xl font-display font-bold text-gray-900">{user.name}</h1>
               <div className="flex items-center gap-4 text-gray-500 text-sm">
@@ -97,7 +97,7 @@ export default function Profile() {
                 {user.location && <span className="flex items-center gap-1"><MapPin className="w-4 h-4" /> {user.location}</span>}
               </div>
             </div>
-            
+
             {user.bio ? (
               <p className="mt-4 text-gray-600 leading-relaxed">{user.bio}</p>
             ) : (
@@ -107,7 +107,7 @@ export default function Profile() {
         </motion.div>
 
         {/* Stats Grid */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}

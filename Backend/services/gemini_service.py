@@ -289,3 +289,177 @@ Guidelines:
         print(f"Gemini resolution summary call failed: {e}")
         return f"The reported {category.lower()} at {location} was inspected and resolved by the PMC {department}. Work details: {officer_notes or 'Repaired and restored'}"
 
+
+def generate_report_post_caption(category, location, department, ai_description=None,
+                                  contributor_count=1, confidence=None):
+    """
+    Generates a professional, citizen-friendly community announcement (120-180 words)
+    for a newly submitted report. Stored as report_post_caption.
+    """
+    if not GEMINI_API_KEY:
+        return (
+            f"🚧 {category} Alert\n\n"
+            f"A {category.lower()} has been reported near {location}.\n\n"
+            f"Our AI successfully detected the issue and forwarded the complaint to the "
+            f"Pune Municipal Corporation {department}.\n\n"
+            f"This issue is now awaiting inspection. If you have noticed the same issue, "
+            f"you can support this report.\n\n"
+            f"Stay informed. Help improve your city.\n\n"
+            f"#SnapFixAI #Pune #{category.replace(' ', '')}"
+        )
+
+    conf_text = f"{round(float(confidence))}%" if confidence else "high"
+    contrib_text = (
+        f"This issue has already been supported by {contributor_count} citizens."
+        if contributor_count > 1 else
+        "If you have noticed the same issue, you can support this report."
+    )
+
+    prompt = f"""You are a civic engagement writer for SnapFix AI, a smart municipal reporting platform in Pune, India.
+
+A citizen has just reported a civic issue and it has been verified by our AI system.
+
+Issue Details:
+- Category: {category}
+- Location: {location}
+- Department: {department}
+- AI Detection Confidence: {conf_text}
+- AI Summary: {ai_description or 'Not provided'}
+
+Write a professional, citizen-friendly community announcement for the SnapFix AI Community Feed.
+
+Requirements:
+1. Start with a one-line impactful header (e.g. "🚧 Road Safety Alert")
+2. Briefly describe the issue and its location (1-2 sentences)
+3. Mention that SnapFix AI detected it and forwarded to the correct department
+4. State it is awaiting inspection
+5. Encourage community participation ({contrib_text})
+6. End with a positive civic message and 2-3 relevant hashtags
+7. Keep total length between 120 and 180 words
+8. Professional, positive, citizen-friendly tone
+9. No emojis except the optional warning icon in the header
+
+Output ONLY the plain announcement text. No JSON, no markdown quotes, no code blocks."""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4}
+    }
+
+    try:
+        print(f"Generating community report caption for {category} at {location}...")
+        response = requests.post(url, headers={"Content-Type": "application/json"},
+                                 json=payload, timeout=20)
+        response.raise_for_status()
+        text = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if text.startswith("```"):
+            text = clean_json_string(text)
+        print("✓ Report post caption generated.")
+        return text
+    except Exception as e:
+        print(f"Report caption generation failed: {e}")
+        return (
+            f"🚧 {category} Alert\n\n"
+            f"A {category.lower()} has been reported near {location}. "
+            f"SnapFix AI has automatically detected and forwarded this complaint to the "
+            f"Pune Municipal Corporation {department}.\n\n"
+            f"This issue is now awaiting inspection.\n\n"
+            f"Help build a smarter Pune.\n\n"
+            f"#SnapFixAI #Pune #{category.replace(' ', '')}"
+        )
+
+
+def generate_resolution_post_caption(category, location, department, officer_name,
+                                      officer_notes=None, contributor_count=1,
+                                      resolution_time=None, road_damage_percentage=None,
+                                      citizen_description=None):
+    """
+    Generates a civic success story (150-200 words) for a resolved issue.
+    Naturally acknowledges community participation. Stored as resolution_post_caption.
+    """
+    if not GEMINI_API_KEY:
+        contrib_sentence = (
+            f"This issue was brought to our attention through the support of {contributor_count} local citizens."
+            if contributor_count > 1 else
+            "This issue was reported by a diligent citizen."
+        )
+        return (
+            f"{category} Restored Successfully\n\n"
+            f"The {category.lower()} reported near {location} has been successfully resolved by "
+            f"the Pune Municipal Corporation {department}.\n\n"
+            f"{contrib_sentence} Their timely reporting enabled the department to prioritize and "
+            f"complete the work efficiently.\n\n"
+            f"We sincerely thank all citizens who reported and supported this issue. "
+            f"Your participation helps us build a safer and smarter Pune.\n\n"
+            f"Together, we are improving our city.\n\n"
+            f"#PMC #SnapFixAI #SmartCity #Pune"
+        )
+
+    contrib_context = (
+        f"{contributor_count} citizens collectively reported this issue, helping the department prioritize it."
+        if contributor_count > 1 else
+        "A citizen reported this issue promptly, enabling fast action."
+    )
+    res_time_text = f"Resolution Time: {resolution_time}" if resolution_time else ""
+    damage_text = f"Road Damage: {road_damage_percentage}" if road_damage_percentage else ""
+
+    prompt = f"""You are a Pune Municipal Corporation (PMC) communications officer writing a civic success story for the SnapFix AI Community Feed.
+
+An issue has just been successfully resolved. Write a professional, warm, and celebratory public announcement.
+
+Resolution Details:
+- Category: {category}
+- Location: {location}
+- Department: {department}
+- Officer: {officer_name}
+- Resolution Notes: {officer_notes or 'Issue repaired and restored to normal condition.'}
+- Citizen Description: {citizen_description or 'Not provided'}
+- Community Participation: {contrib_context}
+- {res_time_text}
+- {damage_text}
+
+Requirements:
+1. Start with a clear success headline (e.g. "Road Restored Successfully")
+2. Describe the problem that was fixed and its location
+3. Mention the department and officer who resolved it
+4. Naturally acknowledge the community: how many citizens helped, and why it mattered
+5. Thank citizens for their participation
+6. Encourage reporting future issues
+7. End with 3-4 relevant hashtags
+8. Total length: 150-200 words
+9. Warm, celebratory, professional civic tone
+10. No emojis
+
+Output ONLY the plain announcement text. No JSON, no markdown, no code blocks."""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4}
+    }
+
+    try:
+        print(f"Generating community resolution caption for {category} at {location}...")
+        response = requests.post(url, headers={"Content-Type": "application/json"},
+                                 json=payload, timeout=20)
+        response.raise_for_status()
+        text = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if text.startswith("```"):
+            text = clean_json_string(text)
+        print("✓ Resolution post caption generated.")
+        return text
+    except Exception as e:
+        print(f"Resolution caption generation failed: {e}")
+        contrib_sentence = (
+            f"This issue was brought to our attention through the support of {contributor_count} local citizens."
+            if contributor_count > 1 else "A citizen reported this issue."
+        )
+        return (
+            f"{category} Resolved Successfully\n\n"
+            f"The {category.lower()} near {location} has been successfully resolved by Officer {officer_name} "
+            f"of the PMC {department}.\n\n"
+            f"{contrib_sentence} Their participation enabled prompt resolution.\n\n"
+            f"Thank you for helping improve Pune.\n\n"
+            f"#PMC #SnapFixAI #SmartCity"
+        )

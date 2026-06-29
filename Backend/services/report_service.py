@@ -128,7 +128,75 @@ def create_report(user_id, image_path, annotated_image, latitude, longitude, add
         similarity_score=similarity_score
     )
 
-    # 7. Fetch the fully saved database record to return
+    # 7. Community Feed Integration (automatic, non-blocking)
+    try:
+        # Resolve department info from category
+        category_lower = (issue_type or "").lower()
+        if any(c in category_lower for c in ['pothole', 'road', 'crack']):
+            dept_name = 'Road Department'
+        elif any(c in category_lower for c in ['garbage', 'sanit', 'graffiti']):
+            dept_name = 'Sanitation'
+        elif any(c in category_lower for c in ['electric', 'streetlight', 'lamp', 'wire']):
+            dept_name = 'Electrical'
+        elif any(c in category_lower for c in ['water', 'drainage']):
+            dept_name = 'Water Department'
+        else:
+            dept_name = 'Road Department'
+
+        # Lookup department id
+        dept_id = None
+        try:
+            dept_lookup = database_service.get_connection()
+            dept_cursor = dept_lookup.cursor(dictionary=True)
+            dept_cursor.execute("SELECT id FROM departments WHERE name = %s", (dept_name,))
+            dept_row = dept_cursor.fetchone()
+            dept_id = dept_row['id'] if dept_row else None
+            dept_cursor.close()
+            dept_lookup.close()
+        except Exception:
+            pass
+
+        location_str = address if address else f"{lat:.6f}, {lon:.6f}"
+        short_area = location_str.split(',')[0].strip() if ',' in location_str else location_str
+
+        if is_duplicate and duplicate_issue_id:
+            # Add as contributor to existing post
+            database_service.handle_duplicate_community_post(
+                original_report_id=duplicate_issue_id,
+                new_report_id=report_id,
+                user_id=int(user_id),
+                confidence=float(confidence or 0),
+                area=short_area
+            )
+        else:
+            # Generate community report caption
+            report_post_caption = gemini_service.generate_report_post_caption(
+                category=issue_type,
+                location=location_str,
+                department=dept_name,
+                ai_description=ai_desc,
+                contributor_count=1,
+                confidence=confidence
+            )
+            # Create fresh community post
+            database_service.create_community_report_post(
+                report_id=report_id,
+                user_id=int(user_id),
+                category=issue_type,
+                location=location_str,
+                image_before=image_path,
+                department_id=dept_id,
+                department_name=dept_name,
+                report_post_caption=report_post_caption,
+                ai_description=ai_desc,
+                road_damage_percentage=road_damage_pct,
+                confidence=float(confidence or 0)
+            )
+    except Exception as e:
+        # Community post creation is non-critical — log and continue
+        print(f"Warning: Community post auto-creation failed for report {report_id}: {e}")
+
+    # 8. Fetch the fully saved database record to return
     saved_report = database_service.get_report_by_id(report_id)
     
     return {

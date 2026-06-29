@@ -535,6 +535,122 @@ def officer_generate_summary():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+# =============================================================================
+# COMMUNITY FEED ROUTES
+# =============================================================================
+
+@app.route('/api/community/stats', methods=['GET'])
+def community_stats():
+    """Returns live civic impact statistics for the Community Feed hero banner."""
+    try:
+        stats = database_service.get_community_stats()
+        return jsonify({"success": True, "stats": stats})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/community/feed', methods=['GET'])
+def community_feed():
+    """
+    Returns paginated community posts.
+    Supports: page, limit, status, category, sort, search, userId
+    """
+    page = request.args.get('page', default=1, type=int)
+    limit = request.args.get('limit', default=8, type=int)
+    status = request.args.get('status')
+    category = request.args.get('category')
+    sort = request.args.get('sort', default='Newest')
+    search = request.args.get('search')
+    user_id = request.args.get('userId', type=int)
+
+    try:
+        data = database_service.get_community_feed(
+            page=page,
+            limit=limit,
+            status=status,
+            category=category,
+            sort=sort,
+            search=search,
+            user_id=user_id
+        )
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/community/post/<int:post_id>', methods=['GET'])
+def community_post_detail(post_id):
+    """
+    Returns full post detail including comments and workflow timeline.
+    Supports: userId query param to check has_liked.
+    """
+    user_id = request.args.get('userId', type=int)
+    try:
+        post = database_service.get_community_post_detail(post_id, user_id=user_id)
+        if post:
+            return jsonify({"success": True, "post": post})
+        return jsonify({"success": False, "message": "Post not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/community/contributors/<int:post_id>', methods=['GET'])
+def community_contributors(post_id):
+    """Returns ordered list of contributors for a community post."""
+    try:
+        contributors = database_service.get_community_contributors(post_id)
+        return jsonify({"success": True, "contributors": contributors})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/community/like', methods=['POST'])
+def community_like():
+    """
+    Toggles like on a community post.
+    Body: { postId, userId }
+    """
+    data = request.json
+    if not data or 'postId' not in data or 'userId' not in data:
+        return jsonify({"success": False, "message": "Missing postId or userId"}), 400
+
+    post_id = int(data['postId'])
+    user_id = int(data['userId'])
+
+    try:
+        liked, likes_count = database_service.toggle_community_like(post_id, user_id)
+        return jsonify({"success": True, "liked": liked, "likesCount": likes_count})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/community/comment', methods=['POST'])
+def community_comment():
+    """
+    Adds a comment to a community post.
+    Body: { postId, userId, comment }
+    """
+    data = request.json
+    if not data or 'postId' not in data or 'userId' not in data or 'comment' not in data:
+        return jsonify({"success": False, "message": "Missing required fields"}), 400
+
+    post_id = int(data['postId'])
+    user_id = int(data['userId'])
+    comment_text = data['comment'].strip()
+
+    if not comment_text:
+        return jsonify({"success": False, "message": "Comment cannot be empty"}), 400
+
+    try:
+        comment = database_service.add_community_comment(post_id, user_id, comment_text)
+        if comment:
+            return jsonify({"success": True, "comment": comment})
+        return jsonify({"success": False, "message": "Failed to add comment"}), 500
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
 

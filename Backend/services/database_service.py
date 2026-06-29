@@ -751,6 +751,13 @@ def assign_report_to_officer(report_id, officer_id, remarks="Issue assigned to o
         """, (report_id, f"Issue #{report_id} has been assigned to {officer['name']} ({officer['department']})"))
         
         conn.commit()
+
+        # Sync community post status badge to 'In Progress'
+        try:
+            update_community_post_status(report_id, 'In Progress')
+        except Exception as ce:
+            print(f"Warning: community post status sync failed: {ce}")
+
         return True
     except Exception as e:
         conn.rollback()
@@ -813,6 +820,71 @@ def resolve_report(report_id, officer_id, notes, resolution_image, resolution_su
         """, (report_id, f"Issue #{report_id} has been marked as Resolved by Officer {officer['name']}"))
         
         conn.commit()
+
+        # Calculate resolution time for community post
+        try:
+            resolution_time_str = None
+            cursor.execute(
+                "SELECT created_at, resolved_at FROM reports WHERE id = %s", (report_id,)
+            )
+            timing = cursor.fetchone()
+            if timing and timing['resolved_at'] and timing['created_at']:
+                diff_sec = (timing['resolved_at'] - timing['created_at']).total_seconds()
+                if diff_sec < 3600:
+                    resolution_time_str = f"{round(diff_sec / 60)} Mins"
+                elif diff_sec < 86400:
+                    resolution_time_str = f"{round(diff_sec / 3600, 1)} Hrs"
+                else:
+                    resolution_time_str = f"{round(diff_sec / 86400, 1)} Days"
+        except Exception:
+            resolution_time_str = None
+
+        # Auto-generate resolution community post
+        try:
+            from services import gemini_service as _gs
+            # Build resolution caption
+            report_meta = get_report_details_for_officer(report_id)
+            category = report_meta.get('issue_type', 'Issue') if report_meta else 'Issue'
+            location = report_meta.get('location', 'Pune') if report_meta else 'Pune'
+            officer_info = report_meta.get('assigned_officer') if report_meta else None
+            officer_name_str = officer_info['name'] if officer_info else officer.get('name', 'PMC Officer')
+            dept_name_str = officer_info['department'] if officer_info else officer.get('department', 'PMC')
+            contrib_row = None
+            try:
+                cursor.execute(
+                    "SELECT contributors_count FROM community_posts WHERE report_id=%s AND post_type='report' LIMIT 1",
+                    (report_id,)
+                )
+                contrib_row = cursor.fetchone()
+            except Exception:
+                pass
+            contrib_count = contrib_row['contributors_count'] if contrib_row else 1
+            road_dmg = report_meta.get('road_damage_percentage') if report_meta else None
+            citizen_desc = report_meta.get('user_description') if report_meta else None
+
+            res_caption = _gs.generate_resolution_post_caption(
+                category=category,
+                location=location,
+                department=dept_name_str,
+                officer_name=officer_name_str,
+                officer_notes=notes,
+                contributor_count=contrib_count,
+                resolution_time=resolution_time_str,
+                road_damage_percentage=road_dmg,
+                citizen_description=citizen_desc
+            )
+            create_community_resolution_post(
+                report_id=report_id,
+                officer_id=officer_id,
+                resolution_image=resolution_image,
+                resolution_post_caption=res_caption,
+                resolution_time=resolution_time_str
+            )
+            # Also update original report post status badge
+            update_community_post_status(report_id, 'Resolved')
+        except Exception as ce:
+            print(f"Warning: community resolution post creation failed: {ce}")
+
         return True
     except Exception as e:
         conn.rollback()
@@ -1273,3 +1345,598 @@ def get_officer_profile(officer_id):
         cursor.close()
         conn.close()
 
+
+# =============================================================================
+# COMMUNITY FEED — DATABASE SERVICE FUNCTIONS
+# =============================================================================
+
+def _format_iso(val):
+    """Helper: safely convert datetime to ISO string."""
+    if val is None:
+        return None
+    if hasattr(val, 'isoformat'):
+        return val.isoformat()
+    return str(val)
+
+
+def create_community_report_post(report_id, user_id, category, location,
+                                  image_before, department_id, department_name,
+                                  report_post_caption, ai_description=None,
+                                  road_damage_percentage=None, confidence=None):
+    """
+    Creates a new community post of type 'report' immediately after a citizen
+    submits a report. Also inserts the original reporter as a contributor.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        conn.start_transaction()
+
+        short_loc = location.split(',')[0].strip() if location and ',' in location else (location or 'Pune')
+        friendly_title = f"{category} — {short_loc}"
+        content = ai_description or f"A {category.lower()} has been reported near {location}."
+
+        cursor.execute("""
+            INSERT INTO community_posts (
+                report_id, post_type, author_type, department_id,
+                title, friendly_title, content, image_before,
+                report_post_caption, report_status, report_category,
+                report_location, department_name, road_damage_percentage,
+                contributors_count
+            ) VALUES (%s, 'report', 'citizen', %s,
+                      %s, %s, %s, %s,
+                      %s, 'Reported', %s,
+                      %s, %s, %s,
+                      1)
+        """, (
+            report_id, department_id,
+            friendly_title, friendly_title, content, image_before,
+            report_post_caption, category,
+            location, department_name, road_damage_percentage
+        ))
+        post_id = cursor.lastrowid
+
+        cursor.execute("""
+            INSERT INTO community_post_contributors
+                (post_id, report_id, user_id, role, area, confidence)
+            VALUES (%s, %s, %s, 'Original Reporter', %s, %s)
+        """, (post_id, report_id, user_id, short_loc, float(confidence or 0)))
+
+        conn.commit()
+        print(f"✓ Community report post created: id={post_id} for report_id={report_id}")
+        return post_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating community report post: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def handle_duplicate_community_post(original_report_id, new_report_id,
+                                     user_id, confidence=0, area=None):
+    """
+    When a duplicate report is detected:
+    - Find community post linked to original_report_id
+    - Add new reporter as Supporter contributor
+    - Increment contributors_count on that post
+    Returns the existing post_id.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        conn.start_transaction()
+
+        cursor.execute("""
+            SELECT id, contributors_count FROM community_posts
+            WHERE report_id = %s AND post_type = 'report'
+            LIMIT 1
+        """, (original_report_id,))
+        post_row = cursor.fetchone()
+
+        if not post_row:
+            print(f"No community post found for original report {original_report_id}.")
+            conn.rollback()
+            return None
+
+        post_id = post_row['id']
+
+        cursor.execute("""
+            INSERT INTO community_post_contributors
+                (post_id, report_id, user_id, role, area, confidence)
+            VALUES (%s, %s, %s, 'Supporter', %s, %s)
+        """, (post_id, new_report_id, user_id, area or 'Pune', float(confidence or 0)))
+
+        cursor.execute("""
+            UPDATE community_posts
+            SET contributors_count = contributors_count + 1, updated_at = NOW()
+            WHERE id = %s
+        """, (post_id,))
+
+        new_count = post_row['contributors_count'] + 1
+        if new_count % 5 == 0:
+            cursor.execute("""
+                INSERT INTO notifications (report_id, title, message, type)
+                VALUES (%s, %s, %s, 'community_milestone')
+            """, (
+                original_report_id,
+                f"Community Milestone — {new_count} Reports",
+                f"{new_count} citizens have now reported Issue #{original_report_id}. Urgent attention needed!"
+            ))
+
+        conn.commit()
+        print(f"✓ Duplicate contributor added to community post {post_id} (count={new_count})")
+        return post_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error handling duplicate community post: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def create_community_resolution_post(report_id, officer_id, resolution_image,
+                                      resolution_post_caption, resolution_time=None):
+    """
+    Creates a new community post of type 'resolved' when an officer resolves an issue.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        conn.start_transaction()
+
+        cursor.execute("""
+            SELECT r.*, o.name as officer_name, o.department as officer_dept,
+                   d.id as dept_id, d.name as dept_name
+            FROM reports r
+            LEFT JOIN officers o ON o.id = %s
+            LEFT JOIN departments d ON d.name = o.department
+            WHERE r.id = %s
+        """, (officer_id, report_id))
+        report = cursor.fetchone()
+        if not report:
+            conn.rollback()
+            return None
+
+        category = report.get('category') or 'Issue'
+        location = report.get('address') or 'Pune'
+        image_before = report.get('image_path') or ''
+        officer_name = report.get('officer_name') or 'PMC Officer'
+        dept_name = report.get('dept_name') or 'Municipal Corporation'
+        dept_id = report.get('dept_id')
+        road_damage_pct = report.get('road_damage_percentage')
+
+        cursor.execute("""
+            SELECT id, contributors_count FROM community_posts
+            WHERE report_id = %s AND post_type = 'report'
+            LIMIT 1
+        """, (report_id,))
+        original_post = cursor.fetchone()
+        contrib_count = original_post['contributors_count'] if original_post else 1
+
+        short_loc = location.split(',')[0].strip() if ',' in location else location
+        friendly_title = f"{category} Restored — {short_loc}"
+        content = resolution_post_caption or f"The {category.lower()} at {location} has been resolved."
+
+        cursor.execute("""
+            INSERT INTO community_posts (
+                report_id, post_type, author_type, department_id,
+                title, friendly_title, content,
+                image_before, image_after,
+                resolution_post_caption, report_status, report_category,
+                report_location, department_name, officer_name,
+                road_damage_percentage, resolution_time,
+                contributors_count
+            ) VALUES (
+                %s, 'resolved', 'pmc', %s,
+                %s, %s, %s,
+                %s, %s,
+                %s, 'Resolved', %s,
+                %s, %s, %s,
+                %s, %s,
+                %s
+            )
+        """, (
+            report_id, dept_id,
+            friendly_title, friendly_title, content,
+            image_before, resolution_image,
+            resolution_post_caption, category,
+            location, dept_name, officer_name,
+            road_damage_pct, resolution_time,
+            contrib_count
+        ))
+        post_id = cursor.lastrowid
+
+        cursor.execute("""
+            INSERT INTO notifications (report_id, title, message, type)
+            VALUES (%s, 'Issue Resolved', %s, 'community_resolved')
+        """, (
+            report_id,
+            f"The {category.lower()} near {short_loc} has been resolved by PMC Officer {officer_name}!"
+        ))
+
+        conn.commit()
+        print(f"✓ Community resolution post created: id={post_id} for report_id={report_id}")
+        return post_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating community resolution post: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def update_community_post_status(report_id, new_status):
+    """Syncs the report_status badge on all community posts tied to this report."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE community_posts
+            SET report_status = %s, updated_at = NOW()
+            WHERE report_id = %s
+        """, (new_status, report_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating community post status: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_community_feed(page=1, limit=8, status=None, category=None,
+                        sort='Newest', search=None, user_id=None):
+    """
+    Returns paginated community posts with filtering, sorting and search.
+    Includes has_liked flag per post for the current user.
+    """
+    import math
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        where_clauses = []
+        params = []
+
+        if status and status != 'All':
+            if status == 'Resolved':
+                where_clauses.append("cp.post_type = 'resolved'")
+            elif status == 'Reported':
+                where_clauses.append("cp.report_status = 'Reported' AND cp.post_type = 'report'")
+            elif status == 'In Progress':
+                where_clauses.append("cp.report_status = 'In Progress' AND cp.post_type = 'report'")
+
+        if category and category != 'All':
+            cat_map = {
+                'Potholes': ['Pothole', 'Potholes', 'Road Crack', 'Road Cracks'],
+                'Garbage': ['Garbage', 'Overflowing Dustbins', 'Garbage Overflow', 'Graffiti'],
+                'Street Lights': ['Broken Street Light', 'Broken Street Lights', 'Electrical'],
+                'Water Leakage': ['Water Leakage', 'Water Leak', 'Drainage Overflow']
+            }
+            cats = cat_map.get(category, [category])
+            placeholders = ','.join(['%s'] * len(cats))
+            where_clauses.append(f"cp.report_category IN ({placeholders})")
+            params.extend(cats)
+
+        if search and search.strip():
+            s = f"%{search.strip()}%"
+            where_clauses.append("""(
+                cp.report_location LIKE %s OR cp.friendly_title LIKE %s OR
+                cp.department_name LIKE %s OR cp.report_category LIKE %s
+            )""")
+            params.extend([s, s, s, s])
+
+        where_str = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+        sort_map = {
+            'Newest': 'cp.created_at DESC',
+            'Most Supported': 'cp.contributors_count DESC, cp.created_at DESC',
+            'Recently Resolved': "CASE WHEN cp.post_type='resolved' THEN 0 ELSE 1 END ASC, cp.created_at DESC",
+            'High Priority': 'cp.contributors_count DESC, cp.likes_count DESC',
+            'Most Liked': 'cp.likes_count DESC, cp.created_at DESC'
+        }
+        order_by = sort_map.get(sort, 'cp.created_at DESC')
+
+        cursor.execute(f"SELECT COUNT(*) as total FROM community_posts cp {where_str}", params)
+        total = cursor.fetchone()['total'] or 0
+
+        offset = (page - 1) * limit
+        cursor.execute(
+            f"SELECT cp.* FROM community_posts cp {where_str} ORDER BY {order_by} LIMIT %s OFFSET %s",
+            params + [limit, offset]
+        )
+        rows = cursor.fetchall()
+
+        liked_ids = set()
+        if user_id and rows:
+            post_ids = [r['id'] for r in rows]
+            placeholders = ','.join(['%s'] * len(post_ids))
+            cursor.execute(
+                f"SELECT post_id FROM community_post_likes WHERE user_id = %s AND post_id IN ({placeholders})",
+                [user_id] + post_ids
+            )
+            liked_ids = {row['post_id'] for row in cursor.fetchall()}
+
+        posts = []
+        for row in rows:
+            posts.append({
+                'id': row['id'],
+                'report_id': row['report_id'],
+                'post_type': row['post_type'],
+                'author_type': row['author_type'],
+                'department_id': row['department_id'],
+                'title': row['title'],
+                'friendly_title': row['friendly_title'],
+                'content': row['content'],
+                'report_post_caption': row['report_post_caption'],
+                'resolution_post_caption': row['resolution_post_caption'],
+                'image_before': row['image_before'],
+                'image_after': row['image_after'],
+                'report_status': row['report_status'],
+                'report_category': row['report_category'],
+                'report_location': row['report_location'],
+                'department_name': row['department_name'],
+                'officer_name': row['officer_name'],
+                'road_damage_percentage': row['road_damage_percentage'],
+                'resolution_time': row['resolution_time'],
+                'contributors_count': row['contributors_count'] or 1,
+                'likes_count': row['likes_count'] or 0,
+                'comments_count': row['comments_count'] or 0,
+                'views_count': row['views_count'] or 0,
+                'has_liked': row['id'] in liked_ids,
+                'created_at': _format_iso(row['created_at']),
+                'updated_at': _format_iso(row['updated_at'])
+            })
+
+        return {
+            'posts': posts,
+            'total': total,
+            'page': page,
+            'limit': limit,
+            'totalPages': math.ceil(total / limit) if total > 0 else 1
+        }
+    except Exception as e:
+        print(f"Error in get_community_feed: {e}")
+        return {'posts': [], 'total': 0, 'page': page, 'limit': limit, 'totalPages': 1}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_community_post_detail(post_id, user_id=None):
+    """
+    Returns full post details + comments + timeline + has_liked.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT * FROM community_posts WHERE id = %s", (post_id,))
+        post = cursor.fetchone()
+        if not post:
+            return None
+
+        cursor.execute("UPDATE community_posts SET views_count = views_count + 1 WHERE id = %s", (post_id,))
+        conn.commit()
+
+        cursor.execute("""
+            SELECT c.id, c.comment, c.created_at,
+                   u.full_name as author, u.profile_image as avatar
+            FROM community_post_comments c
+            LEFT JOIN users u ON u.id = c.user_id
+            WHERE c.post_id = %s
+            ORDER BY c.created_at DESC
+        """, (post_id,))
+        comments = [{
+            'id': c['id'], 'comment': c['comment'],
+            'author': c['author'] or 'Anonymous', 'avatar': c['avatar'],
+            'created_at': _format_iso(c['created_at'])
+        } for c in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT action, performed_by, remarks, created_at
+            FROM report_workflow WHERE report_id = %s ORDER BY created_at ASC
+        """, (post['report_id'],))
+        timeline = [{
+            'action': w['action'], 'performed_by': w['performed_by'],
+            'remarks': w['remarks'], 'timestamp': _format_iso(w['created_at'])
+        } for w in cursor.fetchall()]
+
+        has_liked = False
+        if user_id:
+            cursor.execute(
+                "SELECT id FROM community_post_likes WHERE post_id = %s AND user_id = %s",
+                (post_id, user_id)
+            )
+            has_liked = cursor.fetchone() is not None
+
+        return {
+            'id': post['id'], 'report_id': post['report_id'],
+            'post_type': post['post_type'], 'author_type': post['author_type'],
+            'friendly_title': post['friendly_title'], 'title': post['title'],
+            'content': post['content'],
+            'report_post_caption': post['report_post_caption'],
+            'resolution_post_caption': post['resolution_post_caption'],
+            'image_before': post['image_before'], 'image_after': post['image_after'],
+            'report_status': post['report_status'], 'report_category': post['report_category'],
+            'report_location': post['report_location'], 'department_name': post['department_name'],
+            'officer_name': post['officer_name'],
+            'road_damage_percentage': post['road_damage_percentage'],
+            'resolution_time': post['resolution_time'],
+            'contributors_count': post['contributors_count'] or 1,
+            'likes_count': post['likes_count'] or 0,
+            'comments_count': post['comments_count'] or 0,
+            'views_count': (post['views_count'] or 0) + 1,
+            'has_liked': has_liked,
+            'created_at': _format_iso(post['created_at']),
+            'updated_at': _format_iso(post['updated_at']),
+            'comments': comments,
+            'timeline': timeline
+        }
+    except Exception as e:
+        print(f"Error in get_community_post_detail: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def toggle_community_like(post_id, user_id):
+    """Toggles like on a post. Returns (liked: bool, new_count: int)."""
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT id FROM community_post_likes WHERE post_id = %s AND user_id = %s",
+            (post_id, user_id)
+        )
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute("DELETE FROM community_post_likes WHERE post_id = %s AND user_id = %s",
+                           (post_id, user_id))
+            cursor.execute("UPDATE community_posts SET likes_count = GREATEST(0, likes_count - 1) WHERE id = %s",
+                           (post_id,))
+            liked = False
+        else:
+            cursor.execute("INSERT INTO community_post_likes (post_id, user_id) VALUES (%s, %s)",
+                           (post_id, user_id))
+            cursor.execute("UPDATE community_posts SET likes_count = likes_count + 1 WHERE id = %s",
+                           (post_id,))
+            liked = True
+
+        cursor.execute("SELECT likes_count FROM community_posts WHERE id = %s", (post_id,))
+        new_count = cursor.fetchone()['likes_count'] or 0
+        conn.commit()
+        return liked, new_count
+    except Exception as e:
+        conn.rollback()
+        print(f"Error in toggle_community_like: {e}")
+        return False, 0
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def add_community_comment(post_id, user_id, comment_text):
+    """Inserts a comment and increments comments_count. Returns comment dict."""
+    import datetime
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "INSERT INTO community_post_comments (post_id, user_id, comment) VALUES (%s, %s, %s)",
+            (post_id, user_id, comment_text)
+        )
+        comment_id = cursor.lastrowid
+        cursor.execute("UPDATE community_posts SET comments_count = comments_count + 1 WHERE id = %s", (post_id,))
+        cursor.execute("SELECT full_name, profile_image FROM users WHERE id = %s", (user_id,))
+        user_row = cursor.fetchone()
+        conn.commit()
+        return {
+            'id': comment_id, 'comment': comment_text,
+            'author': user_row['full_name'] if user_row else 'Anonymous',
+            'avatar': user_row['profile_image'] if user_row else None,
+            'created_at': datetime.datetime.now().isoformat()
+        }
+    except Exception as e:
+        conn.rollback()
+        print(f"Error in add_community_comment: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_community_contributors(post_id):
+    """Returns ordered list of contributors. Original Reporter first."""
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT ct.id, ct.user_id, ct.role, ct.area, ct.confidence, ct.created_at,
+                   u.full_name as name, u.profile_image as avatar
+            FROM community_post_contributors ct
+            LEFT JOIN users u ON u.id = ct.user_id
+            WHERE ct.post_id = %s
+            ORDER BY FIELD(ct.role, 'Original Reporter', 'Supporter'), ct.created_at ASC
+        """, (post_id,))
+        return [{
+            'id': r['id'], 'user_id': r['user_id'], 'role': r['role'],
+            'name': r['name'] or 'Anonymous Citizen', 'avatar': r['avatar'],
+            'area': r['area'] or 'Pune',
+            'confidence': round(float(r['confidence'] or 0), 1),
+            'created_at': _format_iso(r['created_at'])
+        } for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error in get_community_contributors: {e}")
+        return []
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_community_stats():
+    """Returns live civic impact statistics + trending areas for the hero banner."""
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT COUNT(*) as cnt FROM reports WHERE duplicate_report_id IS NULL")
+        issues_reported = cursor.fetchone()['cnt'] or 0
+
+        cursor.execute("SELECT COUNT(*) as cnt FROM reports WHERE status IN ('Reported', 'In Progress')")
+        live_issues = cursor.fetchone()['cnt'] or 0
+
+        cursor.execute("SELECT COUNT(*) as cnt FROM reports WHERE status = 'Resolved'")
+        issues_resolved = cursor.fetchone()['cnt'] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM reports")
+        citizens_participated = cursor.fetchone()['cnt'] or 0
+
+        cursor.execute("""
+            SELECT AVG(TIMESTAMPDIFF(SECOND, created_at, resolved_at)) as avg_sec
+            FROM reports WHERE status = 'Resolved' AND resolved_at IS NOT NULL
+        """)
+        avg_sec_row = cursor.fetchone()['avg_sec']
+        if avg_sec_row:
+            avg_secs = float(avg_sec_row)
+            if avg_secs < 3600:
+                avg_resolution_time = f"{round(avg_secs / 60)} Mins"
+            elif avg_secs < 86400:
+                avg_resolution_time = f"{round(avg_secs / 3600, 1)} Hrs"
+            else:
+                avg_resolution_time = f"{round(avg_secs / 86400, 1)} Days"
+        else:
+            avg_resolution_time = "N/A"
+
+        cursor.execute("SELECT AVG(ai_confidence) as avg_conf FROM reports WHERE ai_confidence IS NOT NULL")
+        avg_conf_row = cursor.fetchone()['avg_conf']
+        avg_ai_accuracy = f"{round(float(avg_conf_row), 1)}%" if avg_conf_row else "N/A"
+
+        cursor.execute("""
+            SELECT TRIM(SUBSTRING_INDEX(address, ',', 1)) as area, COUNT(*) as report_count
+            FROM reports WHERE address IS NOT NULL AND address != ''
+            GROUP BY TRIM(SUBSTRING_INDEX(address, ',', 1))
+            ORDER BY report_count DESC LIMIT 6
+        """)
+        trending_areas = [{'area': r['area'], 'count': r['report_count']} for r in cursor.fetchall()]
+
+        return {
+            'issues_reported': issues_reported, 'live_issues': live_issues,
+            'issues_resolved': issues_resolved, 'citizens_participated': citizens_participated,
+            'avg_resolution_time': avg_resolution_time, 'avg_ai_accuracy': avg_ai_accuracy,
+            'trending_areas': trending_areas
+        }
+    except Exception as e:
+        print(f"Error in get_community_stats: {e}")
+        return {
+            'issues_reported': 0, 'live_issues': 0, 'issues_resolved': 0,
+            'citizens_participated': 0, 'avg_resolution_time': 'N/A',
+            'avg_ai_accuracy': 'N/A', 'trending_areas': []
+        }
+    finally:
+        cursor.close()
+        conn.close()
