@@ -1,0 +1,124 @@
+{
+    "id": 16,
+    "user_id": 2,
+    "title": "Pothole Detected on Janta Road, Dattawadi",
+    "description": "A significant pothole has been detected on Janta Road, Dattawadi, Pune, with a 96% confidence level. The road surface around the pothole shows signs of wear, and the pothole itself, approximately [320, 202, 485, 356] in bounding box, exhibits considerable depth and exposed aggregate, indicating substantial road damage. This defect poses a moderate risk to pedestrians, particularly at night or in wet conditions, due to potential tripping hazards. For vehicles, especially two-wheelers, it presents a risk of tire damage, suspension issues, and loss of control. Its presence could also cause drivers to swerve, potentially disrupting traffic flow and increasing accident risk on this public thoroughfare. Immediate attention is recommended to prevent further deterioration and ensure public safety.",
+    "category": "Pothole",
+    "address": "Janta Road, Dattawadi, Pune, Pune City Subdistrict, Pune District, Maharashtra, 411001, India",
+    "latitude": 18.49272104,
+    "longitude": 73.83935512,
+    "image_path": "uploads/20260630_020022_6e852c.jpg",
+    "status": "Duplicate",
+    "ai_confidence": 96.0,
+    "duplicate_report_id": 4,
+    "created_at": "2026-06-30T02:00:38",
+    "updated_at": "2026-06-30T02:00:38",
+    "ai_description": "A significant pothole has been detected on Janta Road, Dattawadi, Pune, with a 96% confidence level. The road surface around the pothole shows signs of wear, and the pothole itself, approximately [320, 202, 485, 356] in bounding box, exhibits considerable depth and exposed aggregate, indicating substantial road damage. This defect poses a moderate risk to pedestrians, particularly at night or in wet conditions, due to potential tripping hazards. For vehicles, especially two-wheelers, it presents a risk of tire damage, suspension issues, and loss of control. Its presence could also cause drivers to swerve, potentially disrupting traffic flow and increasing accident risk on this public thoroughfare. Immediate attention is recommended to prevent further deterioration and ensure public safety.",
+    "annotated_image": "uploads/annotated/analyze_20260630_020009_441726_ai.jpg",
+    "detection_count": 8,
+    "bounding_boxes": [
+        {
+            "bbox": [
+                320.03,
+                202.41,
+                485.46,
+                356.2
+            ],
+            "size": "Medium",
+            "class": "pothole",
+            "confidence": 0.992399513721466,
+            "road_damage_percentage": "6%"
+        },
+        {
+            "bbox": [
+                145.08,
+                525.64,
+                351.3,
+                613.53
+            ],
+            "size": "Small",
+            "class": "pothole",
+            "confidence": 0.7267055511474609,
+            "road_damage_percentage": "4%"
+        },
+        {
+            "bbox": [
+                25.21,
+                277.7,
+                74.16,
+                343.73
+            ],
+            "size": "Small",
+            "class": "pothole",
+            "confidence": 0.5625670552253723,
+            "road_damage_percentage": "1%"
+        },
+        {
+            "bbox": [
+                25.11,
+                0,
+                116.2,
+                114.9
+            ],
+            "size": "Small",
+            "class": "pothole",
+            "confidence": 0.477785050868988,
+            "road_damage_percentage": "3%"
+        },
+        {
+            "bbox": [
+                152.55,
+                218.05,
+                348.56,
+                573.9
+            ],
+            "size": "Large",
+            "class": "pothole",
+            "confidence": 0.4003784954547882,
+            "road_damage_percentage": "17%"
+        },
+        {
+            "bbox": [
+                439.36,
+                0,
+                640,
+                389.09
+            ],
+            "size": "Large",
+            "class": "pothole",
+            "confidence": 0.37583866715431213,
+            "road_damage_percentage": "19%"
+        },
+        {
+            "bbox": [
+                307.19,
+                154.33,
+                498.56,
+                376.76
+            ],
+            "size": "Medium",
+            "class": "pothole",
+            "confidence": 0.30644237995147705,
+            "road_damage_percentage": "10%"
+        },
+        {
+            "bbox": [
+                64.66,
+                200.85,
+                352.19,
+                597.38
+            ],
+            "size": "Large",
+            "class": "pothole",
+            "confidence": 0.2849843502044678,
+            "road_damage_percentage": "28%"
+        }
+    ],
+    "severity": "Medium",
+    "priority": "Urgent",
+    "recommended_action": "Immediate repair and resurfacing of the affected road section to mitigate safety hazards and prevent further road degradation.",
+    "user_description": "AI detected a pothole on the road that may require municipal repair.",
+    "ai_social_caption": "\ud83d\udea8 Pothole Alert on Janta Road, Dattawadi, Pune! Our AI detected a significant pothole (96% confidence) posing risks to pedestrians and vehicles. Please drive carefully and report any road hazards. We've notified authorities for urgent repair. #PuneRoads #PotholeReport #RoadSafety #SnapFixAI",
+    "ai_response_json": "{\n  \"title\": \"Pothole Detected on Janta Road, Dattawadi\",\n  \"description\": \"A significant pothole has been detected on Janta Road, Dattawadi, Pune, with a 96% confidence level. The road surface around the pothole shows signs of wear, and the pothole itself, approximately [320, 202, 485, 356] in bounding box, exhibits considerable depth and exposed aggregate, indicating substantial road damage. This defect poses a moderate risk to pedestrians, particularly at night or in wet conditions, due to potential tripping hazards. For vehicles, especially two-wheelers, it presents a risk of tire damage, suspension issues, and loss of control. Its presence could also cause drivers to swerve, potentially disrupting traffic flow and increasing accident risk on this public thoroughfare. Immediate attention is recommended to prevent further deterioration and ensure public safety.\",\n  \"severity\": \"Moderate to High\",\n  \"priority\": \"Urgent\",\n  \"recommended_action\": \"Immediate repair and resurfacing of the affected road section to mitigate safety hazards and prevent further road degradation.\",\n  \"social_caption\": \"\ud83d\udea8 Pothole Alert on Janta Road, Dattawadi, Pune! Our AI detected a significant pothole (96% confidence) posing risks to pedestrians and vehicles. Please drive carefully and report any road hazards. We've notified authorities for urgent repair. #PuneRoads #PotholeReport #RoadSafety #SnapFixAI\",\n  \"road_damage_percentage\": \"6%\"\n}",
+    "road_damage_percentage": "6%"
+}

@@ -3,12 +3,13 @@ from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, auth
 from sentence_transformers import SentenceTransformer
-from geopy.distance import geodesic
-import numpy as np
 import datetime
 import os
-from database import get_connection
+import json
+
 from services.yolo_service import analyze_image_with_yolo
+from services import database_service
+from services import report_service
 
 app = Flask(__name__)
 CORS(app)
@@ -23,19 +24,14 @@ if os.path.exists(cred_path):
 else:
     print(f"Warning: Firebase credentials not found at {cred_path}. Token verification may fail.")
 
-# Load the SentenceTransformer model
+# Load the SentenceTransformer model for similarity matching
 print("Loading SentenceTransformer model...")
 try:
     model = SentenceTransformer('all-MiniLM-L6-v2')
     print("Model loaded successfully.")
 except Exception as e:
-    print(f"Warning: Failed to load model: {e}")
+    print(f"Warning: Failed to load SentenceTransformer model: {e}")
     model = None
-
-def compute_cosine_similarity(vec1, vec2):
-    vec1 = np.array(vec1)
-    vec2 = np.array(vec2)
-    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
 
 @app.route('/analyze-image', methods=['POST'])
 def analyze_image():
@@ -63,7 +59,7 @@ def analyze_image():
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to save image: {str(e)}"}), 500
         
-    # Run YOLO detection
+    # Run YOLO detection service
     result = analyze_image_with_yolo(filepath)
     
     return jsonify(result)
@@ -71,8 +67,7 @@ def analyze_image():
 @app.route('/sync-user', methods=['POST'])
 def sync_user():
     """
-    Synchronizes the Firebase user with the MySQL users table.
-    Matches by email. Updates profile information if user exists.
+    Synchronizes the Firebase user with the MySQL users table via database_service.
     """
     data = request.json
     uid = data.get('uid')
@@ -83,42 +78,17 @@ def sync_user():
     if not uid:
         return jsonify({"success": False, "message": "Firebase UID is required"}), 400
 
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    
     try:
-        # Check if user exists by firebase_uid
-        cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (uid,))
-        user = cursor.fetchone()
-        
-        if user:
-            # Update user profile
-            cursor.execute("""  
-                UPDATE users 
-                SET full_name = %s, profile_image = %s, email = %s
-                WHERE firebase_uid = %s
-            """, (name, photo_url, email, uid))
-            user_id = user['id']
-        else:
-            # Insert new user
-            cursor.execute("""
-                INSERT INTO users (firebase_uid, full_name, email, profile_image, role)
-                VALUES (%s, %s, %s, %s, 'user')
-            """, (uid, name, email, photo_url))
-            user_id = cursor.lastrowid
-            
-        conn.commit()       
-        
+        user_id = database_service.sync_user(uid, email, name, photo_url)
         return jsonify({"success": True, "userId": user_id})
     except Exception as e:
-        conn.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
 
 @app.route('/profile/stats', methods=['GET'])
 def profile_stats():
+    """
+    Retrieves statistics (reported, pending, resolved counts) via database_service.
+    """
     uid = request.args.get('uid')
     if not uid and request.is_json:
         uid = request.json.get('uid')
@@ -126,42 +96,25 @@ def profile_stats():
     if not uid:
         return jsonify({"success": False, "message": "Firebase UID is required"}), 400
 
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-
     try:
-        cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (uid,))
-        user = cursor.fetchone()
-
-        if not user:
+        stats = database_service.get_profile_stats(uid)
+        if stats is None:
             return jsonify({"success": False, "message": "User not found"}), 200
-
-        user_id = user['id']
-        cursor.execute("""
-            SELECT
-                COUNT(*) AS reported,
-                SUM(CASE WHEN status IN ('Pending', 'Under Review', 'Assigned', 'In Progress') THEN 1 ELSE 0 END) AS pending,
-                SUM(CASE WHEN status = 'Resolved' THEN 1 ELSE 0 END) AS resolved
-            FROM reports
-            WHERE user_id = %s
-        """, (user_id,))
-        stats = cursor.fetchone()
 
         return jsonify({
             "success": True,
-            "reported": int(stats['reported'] or 0),
-            "pending": int(stats['pending'] or 0),
-            "resolved": int(stats['resolved'] or 0)
+            "reported": stats["reported"],
+            "pending": stats["pending"],
+            "resolved": stats["resolved"]
         })
     except Exception as e:
-        conn.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
 
 @app.route('/check-duplicate', methods=['POST'])
 def check_duplicate():
+    """
+    Checks if a similar unresolved report is nearby using database_service.
+    """
     data = request.json
     
     if not data or 'latitude' not in data or 'longitude' not in data or 'description' not in data:
@@ -175,77 +128,42 @@ def check_duplicate():
         
     description = data['description']
     
-    if model:
-        embedding = model.encode(description).tolist()
-    else:
-        embedding = []
-        
-    is_duplicate = False
-    duplicate_issue_id = None
-    existing_status = None
-    
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    
     try:
-        cursor.execute("SELECT id, latitude, longitude, description, status FROM reports WHERE status IN ('Pending', 'Under Review', 'Assigned', 'In Progress')")
-        recent_issues = cursor.fetchall()
-        
-        for issue in recent_issues:
-            issue_lat = issue.get('latitude')
-            issue_lon = issue.get('longitude')
-            issue_desc = issue.get('description')
-            
-            if issue_lat is None or issue_lon is None or not issue_desc:
-                continue
-                
-            distance = geodesic((lat, lon), (issue_lat, issue_lon)).meters
-            
-            if distance <= 100 and model:
-                issue_embedding = model.encode(issue_desc).tolist()
-                similarity = compute_cosine_similarity(embedding, issue_embedding)
-                if similarity > 0.85:
-                    is_duplicate = True
-                    duplicate_issue_id = issue.get('id')
-                    existing_status = issue.get('status')
-                    break
-                    
+        is_duplicate, duplicate_id, status = database_service.check_duplicate_for_endpoint(
+            lat=lat,
+            lon=lon,
+            description=description,
+            similarity_model=model
+        )
         return jsonify({
             "success": True,
             "isDuplicate": is_duplicate,
-            "duplicateIssueId": duplicate_issue_id,
-            "existingStatus": existing_status
+            "duplicateIssueId": duplicate_id,
+            "existingStatus": status
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
 
 @app.route('/submit-issue', methods=['POST'])
 def submit_issue():
+    """
+    Registers a complete report. It saves the uploaded image, coordinates
+    report generation with Grok, runs checks, commits transactions, and returns
+    the saved database record to the client.
+    """
     if 'image' not in request.files:
         return jsonify({"success": False, "message": "No image provided"}), 400
         
     image_file = request.files['image']
     data = request.form
     
-    # Required fields
-    required_fields = ['title', 'description', 'latitude', 'longitude', 'address', 'userId', 'userEmail', 'issueType', 'severity']
+    # Required parameters check
+    required_fields = ['latitude', 'longitude', 'userId', 'issueType']
     for field in required_fields:
         if field not in data:
             return jsonify({"success": False, "message": f"Missing field: {field}"}), 400
             
-    try:
-        lat = float(data['latitude'])
-        lon = float(data['longitude'])
-    except ValueError:
-        return jsonify({"success": False, "message": "Invalid latitude or longitude"}), 400
-        
-    description = data['description']
-    
-    # Save the image locally
+    # Save the original image locally to uploads/
     uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
     if not os.path.exists(uploads_dir):
         os.makedirs(uploads_dir)
@@ -258,107 +176,107 @@ def submit_issue():
     random_hex = os.urandom(3).hex()
     filename = f"{timestamp_str}_{random_hex}{ext}"
     filepath = os.path.join(uploads_dir, filename)
-    image_file.save(filepath)
-    
-    local_image_path = f"uploads/{filename}"
-    
-    # Generate embedding for the description
-    if model:
-        embedding = model.encode(description).tolist()
-    else:
-        embedding = []
-        
-    is_duplicate = False
-    duplicate_issue_id = None
-    similarity_score = 0.0
-    
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
     
     try:
-        # Frontend should now send the MySQL user id directly
-        internal_user_id = int(data['userId'])
-            
-        # Check for duplicates by fetching recent/unresolved issues
-        cursor.execute("SELECT id, latitude, longitude, description FROM reports WHERE status IN ('Pending', 'Under Review', 'Assigned', 'In Progress')")
-        recent_issues = cursor.fetchall()
-        
-        for issue in recent_issues:
-            issue_lat = issue.get('latitude')
-            issue_lon = issue.get('longitude')
-            issue_desc = issue.get('description')
-            
-            if issue_lat is None or issue_lon is None or not issue_desc:
-                continue
-                
-            distance = geodesic((lat, lon), (issue_lat, issue_lon)).meters
-            
-            if distance <= 100 and model:
-                # Dynamically compute embedding for existing issue description
-                issue_embedding = model.encode(issue_desc).tolist()
-                similarity = compute_cosine_similarity(embedding, issue_embedding)
-                if similarity > 0.85:
-                    is_duplicate = True
-                    duplicate_issue_id = issue.get('id')
-                    similarity_score = float(similarity)
-                    break
-        
-        status_val = 'Duplicate' if is_duplicate else 'Pending'
-        ai_confidence_val = data.get('confidence', 96) # Default to 96 if not provided
-        
-        # Insert report
-        cursor.execute("""
-            INSERT INTO reports (user_id, title, description, category, address, latitude, longitude, image_path, status, ai_confidence, duplicate_report_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            internal_user_id, data['title'], description, data['issueType'], 
-            data['address'], lat, lon, local_image_path, status_val, 
-            ai_confidence_val, duplicate_issue_id
-        ))
-        issue_id = cursor.lastrowid
-        
-        # Insert report image
-        cursor.execute("""
-            INSERT INTO report_images (report_id, image_path)
-            VALUES (%s, %s)
-        """, (issue_id, local_image_path))
-        
-        # Insert status history
-        remarks = 'Found duplicate during submission' if is_duplicate else 'Initial submission'
-        cursor.execute("""
-            INSERT INTO report_status_history (report_id, status, remarks, updated_by)
-            VALUES (%s, %s, %s, %s)
-        """, (issue_id, status_val, remarks, internal_user_id))
-        
-        if is_duplicate:
-            # Insert duplicate check
-            cursor.execute("""
-                INSERT INTO duplicate_checks (report_id, matched_report_id, similarity_score, ai_message)
-                VALUES (%s, %s, %s, %s)
-            """, (issue_id, duplicate_issue_id, similarity_score, "Detected as a duplicate based on location and description"))
-            
-            conn.commit()
-            return jsonify({
-                "success": True,
-                "isDuplicate": True,
-                "issueId": issue_id,
-                "message": "This issue has already been reported. Your report has been linked to the existing issue."
-            })
-        else:
-            conn.commit()
-            return jsonify({
-                "success": True,
-                "isDuplicate": False,
-                "issueId": issue_id,
-                "message": "Issue reported successfully."
-            })
-            
+        image_file.save(filepath)
     except Exception as e:
-        conn.rollback()
+        return jsonify({"success": False, "message": f"Failed to save image: {str(e)}"}), 500
+        
+    local_image_path = f"uploads/{filename}"
+    
+    # Parse coordinates & identifiers
+    lat = data.get('latitude')
+    lon = data.get('longitude')
+    address = data.get('address', '')
+    user_id = data.get('userId')
+    
+    # Extract optional user description notes
+    user_desc = data.get('additionalNotes', '')
+    if not user_desc and data.get('description'):
+        # Fallback to description field if additionalNotes is empty
+        user_desc = data.get('description')
+
+    # YOLO outputs passed by frontend
+    issue_type = data.get('issueType')
+    confidence = data.get('confidence') or data.get('ai_confidence') or 96
+    detection_count = data.get('detectionCount') or 1
+    
+    # Parse bounding boxes
+    detections_raw = data.get('detections')
+    bounding_boxes = []
+    if detections_raw:
+        try:
+            bounding_boxes = json.loads(detections_raw)
+        except Exception:
+            bounding_boxes = []
+            
+    # Parse annotated prediction image
+    annotated_image = data.get('annotatedImage')
+    if not annotated_image:
+        # Generate prediction path matching uploads/annotated/{filename}_ai.jpg
+        base_name, file_ext = os.path.splitext(filename)
+        annotated_image = f"uploads/annotated/{base_name}_ai{file_ext}"
+        
+        # If the file does not exist, copy original image as fallback
+        full_annotated_path = os.path.join(os.path.dirname(__file__), annotated_image)
+        if not os.path.exists(full_annotated_path):
+            os.makedirs(os.path.dirname(full_annotated_path), exist_ok=True)
+            try:
+                import shutil
+                shutil.copy2(filepath, full_annotated_path)
+            except Exception as e:
+                print(f"Warning: Could not copy fallback annotated image: {e}")
+                annotated_image = local_image_path
+
+    # Parse estimated size
+    estimated_size = data.get('estimatedSize')
+    if not estimated_size:
+        estimated_size = "Medium"
+        if bounding_boxes and len(bounding_boxes) > 0:
+            estimated_size = bounding_boxes[0].get("size", "Medium")
+
+    # Parse road damage percentage
+    road_damage_percentage = data.get('roadDamagePercentage') or data.get('road_damage_percentage')
+    if not road_damage_percentage:
+        if bounding_boxes and len(bounding_boxes) > 0:
+            first_bbox = bounding_boxes[0]
+            if isinstance(first_bbox, dict) and "road_damage_percentage" in first_bbox:
+                road_damage_percentage = first_bbox["road_damage_percentage"]
+            elif isinstance(first_bbox, dict) and "bbox" in first_bbox:
+                # Calculate it from bbox
+                bbox = first_bbox["bbox"]
+                if len(bbox) == 4:
+                    x1, y1, x2, y2 = bbox
+                    box_area = (x2 - x1) * (y2 - y1)
+                    # We can assume a standard 375x375 image for ratio calculation
+                    ratio = box_area / 140625
+                    pct = max(1, round(ratio * 100))
+                    road_damage_percentage = f"{pct}%"
+        if not road_damage_percentage:
+            road_damage_percentage = "18%"
+
+    try:
+        # Delegate report generation and database transactions to the report_service
+        result = report_service.create_report(
+            user_id=user_id,
+            image_path=local_image_path,
+            annotated_image=annotated_image,
+            latitude=lat,
+            longitude=lon,
+            address=address,
+            issue_type=issue_type,
+            confidence=confidence,
+            detection_count=detection_count,
+            bounding_boxes=bounding_boxes,
+            estimated_size=estimated_size,
+            road_damage_percentage=road_damage_percentage,
+            user_description=user_desc,
+            similarity_model=model
+        )
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error handling submit-issue request: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
