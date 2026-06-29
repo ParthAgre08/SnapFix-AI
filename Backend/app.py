@@ -8,6 +8,7 @@ import numpy as np
 import datetime
 import os
 from database import get_connection
+from services.yolo_service import analyze_image_with_yolo
 
 app = Flask(__name__)
 CORS(app)
@@ -40,15 +41,32 @@ def compute_cosine_similarity(vec1, vec2):
 def analyze_image():
     if 'image' not in request.files:
         return jsonify({"success": False, "message": "No image provided"}), 400
+        
+    image_file = request.files['image']
     
-    return jsonify({
-        "success": True,
-        "issueType": "Pothole",
-        "severity": "High",
-        "confidence": 96,
-        "title": "Large Road Pothole",
-        "description": "Detected a large pothole requiring municipal attention."
-    })
+    # Save the image locally to uploads/
+    uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+    if not os.path.exists(uploads_dir):
+        os.makedirs(uploads_dir)
+        
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    original_name = image_file.filename
+    ext = os.path.splitext(original_name)[1]
+    if not ext:
+        ext = '.jpg'
+    random_hex = os.urandom(3).hex()
+    filename = f"analyze_{timestamp_str}_{random_hex}{ext}"
+    filepath = os.path.join(uploads_dir, filename)
+    
+    try:
+        image_file.save(filepath)
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Failed to save image: {str(e)}"}), 500
+        
+    # Run YOLO detection
+    result = analyze_image_with_yolo(filepath)
+    
+    return jsonify(result)
 
 @app.route('/sync-user', methods=['POST'])
 def sync_user():
@@ -141,6 +159,69 @@ def profile_stats():
     finally:
         cursor.close()
         conn.close()
+
+@app.route('/check-duplicate', methods=['POST'])
+def check_duplicate():
+    data = request.json
+    
+    if not data or 'latitude' not in data or 'longitude' not in data or 'description' not in data:
+        return jsonify({"success": False, "message": "Missing required fields"}), 400
+        
+    try:
+        lat = float(data['latitude'])
+        lon = float(data['longitude'])
+    except ValueError:
+        return jsonify({"success": False, "message": "Invalid latitude or longitude"}), 400
+        
+    description = data['description']
+    
+    if model:
+        embedding = model.encode(description).tolist()
+    else:
+        embedding = []
+        
+    is_duplicate = False
+    duplicate_issue_id = None
+    existing_status = None
+    
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute("SELECT id, latitude, longitude, description, status FROM reports WHERE status IN ('Pending', 'Under Review', 'Assigned', 'In Progress')")
+        recent_issues = cursor.fetchall()
+        
+        for issue in recent_issues:
+            issue_lat = issue.get('latitude')
+            issue_lon = issue.get('longitude')
+            issue_desc = issue.get('description')
+            
+            if issue_lat is None or issue_lon is None or not issue_desc:
+                continue
+                
+            distance = geodesic((lat, lon), (issue_lat, issue_lon)).meters
+            
+            if distance <= 100 and model:
+                issue_embedding = model.encode(issue_desc).tolist()
+                similarity = compute_cosine_similarity(embedding, issue_embedding)
+                if similarity > 0.85:
+                    is_duplicate = True
+                    duplicate_issue_id = issue.get('id')
+                    existing_status = issue.get('status')
+                    break
+                    
+        return jsonify({
+            "success": True,
+            "isDuplicate": is_duplicate,
+            "duplicateIssueId": duplicate_issue_id,
+            "existingStatus": existing_status
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
 
 @app.route('/submit-issue', methods=['POST'])
 def submit_issue():

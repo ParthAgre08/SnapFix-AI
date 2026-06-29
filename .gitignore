@@ -1,18 +1,20 @@
-# Environment
-.env
-**/.env
-
 # Python
 __pycache__/
 *.pyc
+venv/
+yolo_env/
+
+# YOLO outputs
+runs/
 
 # Uploads
 uploads/
 
-# Node
-node_modules/
-dist/
+# Environment
+.env
 
-# OS
-.DS_Store
-Thumbs.db
+# Model weights
+*.pt
+
+# Dataset
+dataset/

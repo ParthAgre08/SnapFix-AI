@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
   import { motion } from 'motion/react';
   import { useApp } from '../context/AppContext';
-  import { Upload, MapPin, Sparkles, CheckCircle2, ChevronRight, ChevronLeft, Compass, ArrowLeft, Search } from 'lucide-react';
+  import { Upload, MapPin, Sparkles, CheckCircle2, ChevronRight, ChevronLeft, Compass, ArrowLeft, Search, AlertTriangle } from 'lucide-react';
   import { useNavigate } from 'react-router-dom';
   import axios from 'axios';
   import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
@@ -57,6 +57,10 @@ import React, { useState, useEffect, useRef } from 'react';
     const [issueDesc, setIssueDesc] = useState('');
     const [additionalNotes, setAdditionalNotes] = useState('');
     
+    const [annotatedImage, setAnnotatedImage] = useState('');
+    const [detectionCount, setDetectionCount] = useState(0);
+    const [detections, setDetections] = useState([]);
+    
     // Location defaults to Pune
     const [location, setLocation] = useState({ lat: 18.5204, lng: 73.8567 });
     const [selectedAddress, setSelectedAddress] = useState('Pune, Maharashtra');
@@ -65,6 +69,44 @@ import React, { useState, useEffect, useRef } from 'react';
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitSuccess, setSubmitSuccess] = useState(false);
     const [duplicateMessage, setDuplicateMessage] = useState('');
+    
+    const [duplicateCheck, setDuplicateCheck] = useState({ checking: false, checked: false, isDuplicate: false, status: '' });
+
+    // Reset duplicate check if location or description changes
+    useEffect(() => {
+      setDuplicateCheck({ checking: false, checked: false, isDuplicate: false, status: '' });
+    }, [location, issueDesc]);
+
+    // Check for duplicate when entering Step 3
+    useEffect(() => {
+      if (reportStep === 3 && !duplicateCheck.checked && !duplicateCheck.checking && issueDesc) {
+        const checkDuplicate = async () => {
+          setDuplicateCheck(prev => ({ ...prev, checking: true }));
+          try {
+            const response = await axios.post('http://127.0.0.1:5000/check-duplicate', {
+              latitude: location.lat,
+              longitude: location.lng,
+              description: issueDesc
+            });
+            
+            if (response.data.success) {
+              setDuplicateCheck({
+                checking: false,
+                checked: true,
+                isDuplicate: response.data.isDuplicate,
+                status: response.data.existingStatus
+              });
+            } else {
+              setDuplicateCheck(prev => ({ ...prev, checking: false, checked: true }));
+            }
+          } catch (err) {
+            console.error("Duplicate check failed", err);
+            setDuplicateCheck(prev => ({ ...prev, checking: false, checked: true }));
+          }
+        };
+        checkDuplicate();
+      }
+    }, [reportStep, location, issueDesc, duplicateCheck.checked, duplicateCheck.checking]);
 
     // Get current location on mount
     useEffect(() => {
@@ -119,6 +161,9 @@ import React, { useState, useEffect, useRef } from 'react';
             setConfidenceScore(response.data.confidence);
             setIssueTitle(response.data.title);
             setIssueDesc(response.data.description);
+            setAnnotatedImage(response.data.annotatedImage || '');
+            setDetectionCount(response.data.detectionCount || 0);
+            setDetections(response.data.detections || []);
           }
         } catch (error) {
           console.error("Image analysis failed", error);
@@ -168,6 +213,9 @@ import React, { useState, useEffect, useRef } from 'react';
         formData.append('userEmail', user.email);
         formData.append('issueType', detectedCategory);
         formData.append('severity', detectedSeverity);
+        if (annotatedImage) formData.append('annotatedImage', annotatedImage);
+        formData.append('detectionCount', detectionCount);
+        formData.append('detections', JSON.stringify(detections));
 
         console.log("Sending issue details to backend...");
         const response = await axios.post('http://127.0.0.1:5000/submit-issue', formData, {
@@ -358,6 +406,55 @@ import React, { useState, useEffect, useRef } from 'react';
                 </div>
 
                 <div className="space-y-4">
+                  {/* Duplicate Check Card */}
+                  {duplicateCheck.checking && (
+                    <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-blue-900 text-xs flex gap-3 animate-pulse">
+                      <Compass className="h-5 w-5 text-blue-500 animate-spin shrink-0" />
+                      <div className="flex-1">
+                        <p className="font-bold text-blue-800">Checking for similar complaints...</p>
+                        <p className="text-blue-600/80 mt-0.5">We are analyzing nearby reports to avoid duplicates.</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {duplicateCheck.checked && !duplicateCheck.checking && (
+                    duplicateCheck.isDuplicate ? (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 text-yellow-900 text-xs flex gap-3">
+                        <div className="p-2 bg-yellow-100 text-yellow-600 rounded-xl h-10 w-10 flex items-center justify-center shrink-0">
+                          <AlertTriangle className="h-5 w-5" />
+                        </div>
+                        <div className="flex-grow space-y-1">
+                          <p className="font-bold text-yellow-800 flex items-center gap-1.5 text-sm">
+                            Duplicate Complaint Detected
+                          </p>
+                          <p className="text-yellow-700 mt-1 leading-relaxed">
+                            A similar issue has already been reported nearby. You can view the existing complaint instead of creating a new one.
+                          </p>
+                          {duplicateCheck.status && (
+                            <div className="mt-2 pt-2 border-t border-yellow-200/50">
+                              <span className="font-semibold text-yellow-800">Existing Status: </span>
+                              <span className="font-medium">{duplicateCheck.status}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-emerald-900 text-xs flex gap-3">
+                        <div className="p-2 bg-emerald-100 text-success rounded-xl h-10 w-10 flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="h-5 w-5" />
+                        </div>
+                        <div className="flex-grow space-y-1">
+                          <p className="font-bold text-emerald-800 flex items-center gap-1.5 text-sm">
+                            Unique Complaint
+                          </p>
+                          <p className="text-emerald-700 mt-1 leading-relaxed">
+                            No similar complaints were found nearby. Your report is ready to be submitted.
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )}
+
                   <div className="bg-primary/5 border border-primary/20 rounded-2xl p-5 mb-6">
                     <div className="flex items-center gap-2 mb-4 text-primary">
                       <Sparkles className="h-5 w-5" />
@@ -437,7 +534,7 @@ import React, { useState, useEffect, useRef } from 'react';
             ) : (
               <button
                 onClick={handleFormSubmit}
-                disabled={!issueTitle.trim() || !issueDesc.trim() || isSubmitting}
+                disabled={!issueTitle.trim() || !issueDesc.trim() || isSubmitting || duplicateCheck.checking}
                 className="flex items-center gap-1.5 bg-success hover:bg-success-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs px-6 py-3 rounded-xl shadow-md transition-all cursor-pointer">
                 {isSubmitting ? (
                   <Compass className="h-4 w-4 animate-spin" />
