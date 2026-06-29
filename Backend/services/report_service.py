@@ -100,7 +100,7 @@ def create_report(user_id, image_path, annotated_image, latitude, longitude, add
         model=similarity_model
     )
 
-    status = 'Duplicate' if is_duplicate else 'Pending'
+    status = 'Duplicate' if is_duplicate else 'Reported'
 
     # 6. Database Persistence via database_service
     report_id = database_service.save_report_transaction(

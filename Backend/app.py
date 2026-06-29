@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, auth
@@ -278,5 +278,263 @@ def submit_issue():
         print(f"Error handling submit-issue request: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
+@app.route('/uploads/<path:filename>')
+def serve_uploads(filename):
+    """
+    Serves files from the Backend/uploads folder.
+    """
+    uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+    return send_from_directory(uploads_dir, filename)
+
+@app.route('/api/officer/login', methods=['POST'])
+def officer_login():
+    data = request.json
+    if not data or 'email' not in data or 'password' not in data:
+        return jsonify({"success": False, "message": "Missing email or password"}), 400
+        
+    email = data['email']
+    password = data['password']
+    
+    try:
+        officer = database_service.officer_login(email, password)
+        if officer:
+            return jsonify({"success": True, "officer": officer})
+        return jsonify({"success": False, "message": "Invalid email or password"}), 401
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/dashboard', methods=['GET'])
+def officer_dashboard_consolidated():
+    try:
+        data = database_service.get_dashboard_data()
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/analytics', methods=['GET'])
+def officer_analytics():
+    try:
+        data = database_service.get_analytics_data()
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/reports', methods=['GET'])
+def officer_reports():
+    page = request.args.get('page', default=1, type=int)
+    limit = request.args.get('limit', default=20, type=int)
+    status = request.args.get('status')
+    priority = request.args.get('priority')
+    department_id = request.args.get('department_id', type=int)
+    
+    # Support department name mapping as query param if string provided
+    dept_name = request.args.get('department')
+    if dept_name and not department_id:
+        if 'road' in dept_name.lower():
+            department_id = 1
+        elif 'sanit' in dept_name.lower():
+            department_id = 2
+        elif 'elec' in dept_name.lower():
+            department_id = 3
+        elif 'water' in dept_name.lower():
+            department_id = 4
+            
+    search = request.args.get('search')
+    try:
+        data = database_service.get_paginated_reports(
+            page=page,
+            limit=limit,
+            status=status,
+            priority=priority,
+            department_id=department_id,
+            search=search
+        )
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/reports/<int:report_id>', methods=['GET'])
+@app.route('/api/officer/report/<int:report_id>', methods=['GET'])
+def officer_report_details(report_id):
+    try:
+        report = database_service.get_report_details_for_officer(report_id)
+        if report:
+            return jsonify({"success": True, "report": report})
+        return jsonify({"success": False, "message": "Report not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/profile', methods=['GET'])
+def officer_profile_details():
+    officer_id = request.args.get('officer_id', type=int)
+    if not officer_id:
+        return jsonify({"success": False, "message": "Officer ID is required"}), 400
+    try:
+        profile = database_service.get_officer_profile(officer_id)
+        if profile:
+            return jsonify({"success": True, "profile": profile})
+        return jsonify({"success": False, "message": "Officer not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/notifications', methods=['GET'])
+def officer_notifications():
+    try:
+        data = database_service.get_notifications()
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/notifications/read', methods=['POST'])
+def officer_notifications_read():
+    try:
+        success = database_service.mark_notifications_as_read()
+        return jsonify({"success": success})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/officer/take-issue', methods=['POST'])
+def officer_take_issue():
+    data = request.json
+    if not data or 'reportId' not in data or 'officerId' not in data:
+        return jsonify({"success": False, "message": "Missing reportId or officerId"}), 400
+        
+    report_id = int(data['reportId'])
+    officer_id = int(data['officerId'])
+    remarks = data.get('remarks', 'Officer accepted the issue and initiated resolution workflow.')
+    
+    try:
+        database_service.assign_report_to_officer(report_id, officer_id, remarks)
+        return jsonify({"success": True, "message": "Report successfully assigned. Status updated to In Progress."})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/upload-resolution', methods=['POST'])
+def officer_upload_resolution():
+    if 'image' not in request.files:
+        return jsonify({"success": False, "message": "No resolution image provided"}), 400
+        
+    image_file = request.files['image']
+    
+    # Save the resolution image locally to uploads/resolutions/
+    uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads', 'resolutions')
+    if not os.path.exists(uploads_dir):
+        os.makedirs(uploads_dir)
+        
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ext = os.path.splitext(image_file.filename)[1] or '.jpg'
+    random_hex = os.urandom(3).hex()
+    filename = f"res_{timestamp_str}_{random_hex}{ext}"
+    filepath = os.path.join(uploads_dir, filename)
+    
+    try:
+        image_file.save(filepath)
+        resolution_image_path = f"uploads/resolutions/{filename}"
+        return jsonify({"success": True, "imagePath": resolution_image_path})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Failed to save image: {str(e)}"}), 500
+
+@app.route('/api/officer/resolve-issue', methods=['POST'])
+def officer_resolve_issue():
+    data = request.json
+    if not data or 'reportId' not in data or 'officerId' not in data or 'resolutionImage' not in data:
+        return jsonify({"success": False, "message": "Missing required fields"}), 400
+        
+    report_id = int(data['reportId'])
+    officer_id = int(data['officerId'])
+    resolution_image = data['resolutionImage']
+    notes = data.get('notes', 'Issue resolved.')
+    
+    try:
+        # Fetch report details to get category and location for Gemini prompt
+        report = database_service.get_report_details_for_officer(report_id)
+        if not report:
+            return jsonify({"success": False, "message": "Report not found"}), 404
+            
+        category = report.get('category') or report.get('issue_type') or 'Pothole'
+        location = report.get('address') or report.get('location') or 'Pune'
+        
+        # Get officer's department for Gemini prompt
+        officer_dept = "Municipal Corporation"
+        if report.get('assigned_officer'):
+            officer_dept = report['assigned_officer'].get('department', 'Municipal Corporation')
+        elif 'department' in data:
+            officer_dept = data['department']
+            
+        # Call Gemini service to generate summary
+        from services import gemini_service
+        print(f"Generating resolution summary for report {report_id}...")
+        resolution_summary = gemini_service.generate_resolution_summary(
+            category=category,
+            location=location,
+            officer_notes=notes,
+            department=officer_dept
+        )
+        
+        # Resolve the issue in database
+        database_service.resolve_report(
+            report_id=report_id,
+            officer_id=officer_id,
+            notes=notes,
+            resolution_image=resolution_image,
+            resolution_summary=resolution_summary
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": "Issue successfully marked as Resolved.",
+            "resolutionSummary": resolution_summary
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/officer/generate-summary', methods=['POST'])
+def officer_generate_summary():
+    data = request.json
+    if not data or 'reportId' not in data:
+        return jsonify({"success": False, "message": "Missing reportId"}), 400
+        
+    report_id = int(data['reportId'])
+    
+    try:
+        report = database_service.get_report_details_for_officer(report_id)
+        if not report:
+            return jsonify({"success": False, "message": "Report not found"}), 404
+            
+        category = report.get('category') or report.get('issue_type') or 'Pothole'
+        location = report.get('address') or report.get('location') or 'Pune'
+        notes = "No notes available."
+        
+        # Look for notes in assignment history
+        if report.get('assignments_history'):
+            for assign in report['assignments_history']:
+                if assign.get('status') == 'Resolved' or assign.get('completed_at'):
+                    notes = assign.get('officer_notes', 'Resolved.')
+                    break
+        
+        officer_dept = "Municipal Corporation"
+        if report.get('assigned_officer'):
+            officer_dept = report['assigned_officer'].get('department', 'Municipal Corporation')
+            
+        from services import gemini_service
+        resolution_summary = gemini_service.generate_resolution_summary(
+            category=category,
+            location=location,
+            officer_notes=notes,
+            department=officer_dept
+        )
+        
+        # Save to database
+        database_service.save_manual_resolution_summary(report_id, resolution_summary)
+        
+        return jsonify({
+            "success": True,
+            "resolutionSummary": resolution_summary
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+

@@ -222,3 +222,70 @@ Never mention bounding box coordinates in the response.
             except:
                 pass
         return None
+
+def generate_resolution_summary(category, location, officer_notes, department):
+    """
+    Generates a professional, concise completion summary using Gemini based on 
+    issue details, resolution notes, and the assigned department.
+    """
+    if not GEMINI_API_KEY:
+        print("Warning: GEMINI_API_KEY is not defined. Skipping Gemini summary call.")
+        return f"The reported {category.lower()} at {location} was successfully resolved by the PMC {department}. Work details: {officer_notes or 'Repaired and restored'}"
+        
+    prompt = f"""You are a Pune Municipal Corporation (PMC) Officer assistant.
+Your task is to write a professional, formal, and concise summary of a resolved public issue.
+
+This summary will be permanently stored in the municipal archive and shared with citizens.
+
+Issue Details:
+- Category: {category}
+- Location: {location}
+- Officer Notes: {officer_notes if officer_notes else 'Completed required repairs and cleanup.'}
+- Department: {department}
+
+Guidelines:
+1. Write the summary in a professional, formal third-person perspective (e.g. "The reported pothole on Janta Road was inspected by the PMC Road Department...").
+2. State the problem, the department responsible, the action taken, and the current status (e.g., restored for public use).
+3. Do not include placeholders, internal codes, or instructions.
+4. Keep it concise (max 45 to 60 words).
+5. Output ONLY the plain text paragraph summary. Do not wrap in JSON, markdown quotes, or code blocks.
+"""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2
+        }
+    }
+
+    try:
+        print("Calling Gemini API to generate resolution summary...")
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        
+        result_json = response.json()
+        summary = result_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+        
+        if summary.startswith("```"):
+            summary = clean_json_string(summary)
+            
+        print("Gemini resolution summary generated successfully.")
+        return summary
+    except Exception as e:
+        print(f"Gemini resolution summary call failed: {e}")
+        return f"The reported {category.lower()} at {location} was inspected and resolved by the PMC {department}. Work details: {officer_notes or 'Repaired and restored'}"
+

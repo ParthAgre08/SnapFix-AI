@@ -5,6 +5,8 @@ import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Profile from './pages/Profile';
 import Report from './pages/Report';
+import OfficerLogin from './pages/OfficerLogin';
+import OfficerDashboard from './pages/OfficerDashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 
 export default function App() {
@@ -16,6 +18,8 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
           <Route path="/report" element={<ProtectedRoute><Report /></ProtectedRoute>} />
+          <Route path="/officer/login" element={<OfficerLogin />} />
+          <Route path="/officer/dashboard" element={<OfficerDashboard />} />
         </Routes>
       </AppProvider>
     </BrowserRouter>

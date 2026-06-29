@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { AlertTriangle, Send, Mail, Phone, MapPin, Twitter, Github, Linkedin, MessageCircle, Heart } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 export default function Footer() {
   const [email, setEmail] = useState('');
@@ -71,6 +72,7 @@ export default function Footer() {
               <li><a href="#how-it-works" className="hover:text-primary transition-colors">How It Works</a></li>
               <li><a href="#community" className="hover:text-primary transition-colors">Community Feed</a></li>
               <li><a href="#ai-features" className="hover:text-primary transition-colors">AI Features</a></li>
+              <li><Link to="/officer/login" className="hover:text-blue-400 font-bold text-blue-500 hover:underline transition-all">Login as Municipal Officer</Link></li>
             </ul>
           </div>
 
