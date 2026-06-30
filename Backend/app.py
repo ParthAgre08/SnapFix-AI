@@ -2,12 +2,10 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, auth
-from sentence_transformers import SentenceTransformer
 import datetime
 import os
 import json
 
-from services.yolo_service import analyze_image_with_yolo
 from services import database_service
 from services import report_service
 
@@ -64,14 +62,7 @@ try:
 except Exception as e:
     print(f"Firebase initialization failed: {e}")
 
-# Load the SentenceTransformer model for similarity matching
-print("Loading SentenceTransformer model...")
-try:
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    print("Model loaded successfully.")
-except Exception as e:
-    print(f"Warning: Failed to load SentenceTransformer model: {e}")
-    model = None
+
 
 @app.route('/analyze-image', methods=['POST'])
 def analyze_image():
@@ -99,9 +90,43 @@ def analyze_image():
     except Exception as e:
         return jsonify({"success": False, "message": f"Failed to save image: {str(e)}"}), 500
         
-    # Run YOLO detection service
-    result = analyze_image_with_yolo(filepath)
-    
+    # Forward the image to the AI Service
+    import requests
+    ai_service_url = os.getenv("AI_SERVICE_URL")
+    if not ai_service_url:
+        return jsonify({"success": False, "message": "AI_SERVICE_URL environment variable is not configured."}), 500
+        
+    try:
+        with open(filepath, 'rb') as f:
+            files = {'image': (original_name, f, image_file.content_type)}
+            response = requests.post(f"{ai_service_url.rstrip('/')}/analyze-image", files=files, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+    except Exception as e:
+        print(f"Error calling AI Service /analyze-image: {e}")
+        return jsonify({"success": False, "message": f"Failed to communicate with AI Service: {str(e)}"}), 500
+
+    # Extract base64 annotated image if present and save it locally on the Main Backend
+    annotated_base64 = result.get("annotatedImageBase64")
+    if annotated_base64:
+        try:
+            import base64
+            base_name, file_ext = os.path.splitext(filename)
+            annotated_filename = f"{base_name}_ai{file_ext}"
+            annotated_dir = os.path.join(uploads_dir, 'annotated')
+            os.makedirs(annotated_dir, exist_ok=True)
+            annotated_filepath = os.path.join(annotated_dir, annotated_filename)
+            
+            with open(annotated_filepath, 'wb') as f_out:
+                f_out.write(base64.b64decode(annotated_base64))
+                
+            # Replace the placeholder or AI service's path with the Main Backend local path
+            result["annotatedImage"] = f"uploads/annotated/{annotated_filename}"
+        except Exception as e:
+            print(f"Error decoding/saving annotated image: {e}")
+        finally:
+            result.pop("annotatedImageBase64", None)
+
     return jsonify(result)
 
 @app.route('/sync-user', methods=['POST'])
@@ -153,7 +178,7 @@ def profile_stats():
 @app.route('/check-duplicate', methods=['POST'])
 def check_duplicate():
     """
-    Checks if a similar unresolved report is nearby using database_service.
+    Checks if a similar unresolved report is nearby by fetching reports from MySQL and calling the AI Service.
     """
     data = request.json
     
@@ -169,19 +194,47 @@ def check_duplicate():
     description = data['description']
     
     try:
-        is_duplicate, duplicate_id, status = database_service.check_duplicate_for_endpoint(
-            lat=lat,
-            lon=lon,
-            description=description,
-            similarity_model=model
-        )
+        # Fetch candidate reports from database
+        recent_issues = database_service.get_unresolved_reports_for_duplicate_check()
+        
+        # Format the candidates for the stateless AI Service
+        candidates = []
+        for issue in recent_issues:
+            candidates.append({
+                "id": issue["id"],
+                "latitude": float(issue["latitude"]) if issue["latitude"] is not None else None,
+                "longitude": float(issue["longitude"]) if issue["longitude"] is not None else None,
+                "description": issue.get("user_description") or issue.get("description"),
+                "status": issue.get("status")
+            })
+            
+        # Call the AI Service
+        import requests
+        ai_service_url = os.getenv("AI_SERVICE_URL")
+        if not ai_service_url:
+            return jsonify({"success": False, "message": "AI_SERVICE_URL environment variable is not configured."}), 500
+            
+        payload = {
+            "target": {
+                "latitude": lat,
+                "longitude": lon,
+                "description": description
+            },
+            "candidates": candidates
+        }
+        
+        response = requests.post(f"{ai_service_url.rstrip('/')}/check-duplicate", json=payload, timeout=60)
+        response.raise_for_status()
+        res_data = response.json()
+        
         return jsonify({
             "success": True,
-            "isDuplicate": is_duplicate,
-            "duplicateIssueId": duplicate_id,
-            "existingStatus": status
+            "isDuplicate": res_data.get("isDuplicate", False),
+            "duplicateIssueId": res_data.get("duplicateIssueId"),
+            "existingStatus": res_data.get("existingStatus")
         })
     except Exception as e:
+        print(f"Error checking duplicate via AI Service: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/submit-issue', methods=['POST'])
@@ -310,8 +363,7 @@ def submit_issue():
             bounding_boxes=bounding_boxes,
             estimated_size=estimated_size,
             road_damage_percentage=road_damage_percentage,
-            user_description=user_desc,
-            similarity_model=model
+            user_description=user_desc
         )
         return jsonify(result)
     except Exception as e:

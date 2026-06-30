@@ -14,58 +14,19 @@ def get_connection():
         port=os.getenv("MYSQL_PORT")
     )
 
-def check_duplicate_exists(latitude, longitude, description, model, similarity_threshold=0.85):
+def get_unresolved_reports_for_duplicate_check():
     """
-    Checks if a similar unresolved issue exists within 100 meters and similarity score > threshold.
-    Returns:
-        tuple: (is_duplicate, duplicate_issue_id, similarity_score)
+    Fetches unresolved reports to be sent to the AI Service for duplicate checks.
     """
-    from geopy.distance import geodesic
-    import numpy as np
-
-    def compute_cosine_similarity(vec1, vec2):
-        vec1 = np.array(vec1)
-        vec2 = np.array(vec2)
-        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-
-    if not model or not description:
-        return False, None, 0.0
-
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
-    
     try:
-        # Fetch only unresolved/active reports
         cursor.execute("""
-            SELECT id, latitude, longitude, description, user_description 
+            SELECT id, latitude, longitude, description, user_description, status 
             FROM reports 
             WHERE status IN ('Pending', 'Under Review', 'Assigned', 'In Progress')
         """)
-        recent_issues = cursor.fetchall()
-        
-        embedding = model.encode(description).tolist()
-        
-        for issue in recent_issues:
-            issue_lat = issue.get('latitude')
-            issue_lon = issue.get('longitude')
-            # Fallback to description if user_description is not filled
-            issue_desc = issue.get('user_description') or issue.get('description')
-            
-            if issue_lat is None or issue_lon is None or not issue_desc:
-                continue
-                
-            distance = geodesic((latitude, longitude), (issue_lat, issue_lon)).meters
-            
-            if distance <= 100:
-                issue_embedding = model.encode(issue_desc).tolist()
-                similarity = compute_cosine_similarity(embedding, issue_embedding)
-                if similarity > similarity_threshold:
-                    return True, issue['id'], float(similarity)
-                    
-        return False, None, 0.0
-    except Exception as e:
-        print(f"Error in check_duplicate_exists: {e}")
-        return False, None, 0.0
+        return cursor.fetchall()
     finally:
         cursor.close()
         conn.close()
@@ -331,54 +292,7 @@ def get_profile_stats(uid):
         cursor.close()
         conn.close()
 
-def check_duplicate_for_endpoint(lat, lon, description, similarity_model):
-    """
-    Direct duplicate checking logic for the duplicate check controller endpoint.
-    """
-    from geopy.distance import geodesic
-    import numpy as np
 
-    def compute_cosine_similarity(vec1, vec2):
-        vec1 = np.array(vec1)
-        vec2 = np.array(vec2)
-        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-
-    if not similarity_model or not description:
-        return False, None, None
-
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    try:
-        cursor.execute("""
-            SELECT id, latitude, longitude, description, user_description, status 
-            FROM reports 
-            WHERE status IN ('Pending', 'Under Review', 'Assigned', 'In Progress')
-        """)
-        recent_issues = cursor.fetchall()
-        
-        embedding = similarity_model.encode(description).tolist()
-        
-        for issue in recent_issues:
-            issue_lat = issue.get('latitude')
-            issue_lon = issue.get('longitude')
-            issue_desc = issue.get('user_description') or issue.get('description')
-            
-            if issue_lat is None or issue_lon is None or not issue_desc:
-                continue
-                
-            distance = geodesic((lat, lon), (issue_lat, issue_lon)).meters
-            
-            if distance <= 100:
-                issue_embedding = similarity_model.encode(issue_desc).tolist()
-                similarity = compute_cosine_similarity(embedding, issue_embedding)
-                if similarity > 0.85:
-                    return True, issue.get('id'), issue.get('status')
-                    
-        return False, None, None
-    finally:
-        cursor.close()
-        conn.close()
 
 def officer_login(email, password):
     from werkzeug.security import check_password_hash

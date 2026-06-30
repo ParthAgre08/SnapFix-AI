@@ -1,18 +1,6 @@
 import os
 import cv2
-from ultralytics import YOLO
-
-# Load the YOLO model once when the module is imported
-# This ensures it's only loaded once per worker/process when Flask starts
-MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'best.pt')
-
-try:
-    print(f"Loading YOLO model from {MODEL_PATH}...")
-    model = YOLO(MODEL_PATH)
-    print("YOLO model loaded successfully.")
-except Exception as e:
-    print(f"Error loading YOLO model: {e}")
-    model = None
+import base64
 
 # Temporary mapping until Gemini is integrated
 CLASS_MAPPING = {
@@ -37,6 +25,12 @@ CLASS_MAPPING = {
 }
 
 def analyze_image_with_yolo(image_path):
+    # Dynamic import of model loader to avoid startup import
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from model_loader import get_yolo_model
+    
+    model = get_yolo_model()
     if not model:
         return {
             "success": False,
@@ -51,19 +45,13 @@ def analyze_image_with_yolo(image_path):
         best_detection = None
         max_conf = -1
         
-        # Save annotated image permanently in uploads/annotated/
         res = results[0]
         annotated_img = res.plot()
-        filename = os.path.basename(image_path)
-        base, ext = os.path.splitext(filename)
-        annotated_filename = f"{base}_ai{ext}"
         
-        annotated_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads', 'annotated')
-        os.makedirs(annotated_dir, exist_ok=True)
-        annotated_path = os.path.join(annotated_dir, annotated_filename)
-        cv2.imwrite(annotated_path, annotated_img)
-        
-        relative_annotated_path = f"uploads/annotated/{annotated_filename}"
+        # Base64 encode the annotated image
+        ext = os.path.splitext(image_path)[1] or '.jpg'
+        _, buffer = cv2.imencode(ext, annotated_img)
+        annotated_base64 = base64.b64encode(buffer).decode('utf-8')
         
         # Get image dimensions to compute relative bounding box size
         img_h, img_w = res.orig_shape if hasattr(res, 'orig_shape') else (None, None)
@@ -150,7 +138,8 @@ def analyze_image_with_yolo(image_path):
             "severity": mapping['severity'],
             "title": mapping['title'],
             "description": mapping['description'],
-            "annotatedImage": relative_annotated_path,
+            "annotatedImage": f"uploads/annotated/{os.path.basename(image_path)}",
+            "annotatedImageBase64": annotated_base64,
             "detectionCount": len(detections),
             "detections": detections
         }

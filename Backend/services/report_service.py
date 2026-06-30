@@ -93,12 +93,48 @@ def create_report(user_id, image_path, annotated_image, latitude, longitude, add
 
     # 5. Duplicate Check
     # Check if a similar issue exists within 100 meters
-    is_duplicate, duplicate_issue_id, similarity_score = database_service.check_duplicate_exists(
-        latitude=lat,
-        longitude=lon,
-        description=user_desc_clean if user_desc_clean else ai_desc,
-        model=similarity_model
-    )
+    try:
+        # Fetch candidate reports from database
+        recent_issues = database_service.get_unresolved_reports_for_duplicate_check()
+        
+        # Format the candidates for the stateless AI Service
+        candidates = []
+        for issue in recent_issues:
+            candidates.append({
+                "id": issue["id"],
+                "latitude": float(issue["latitude"]) if issue["latitude"] is not None else None,
+                "longitude": float(issue["longitude"]) if issue["longitude"] is not None else None,
+                "description": issue.get("user_description") or issue.get("description"),
+                "status": issue.get("status")
+            })
+            
+        # Call the AI Service
+        import requests
+        ai_service_url = os.getenv("AI_SERVICE_URL")
+        if not ai_service_url:
+            raise Exception("AI_SERVICE_URL environment variable is not configured.")
+            
+        payload = {
+            "target": {
+                "latitude": lat,
+                "longitude": lon,
+                "description": user_desc_clean if user_desc_clean else ai_desc
+            },
+            "candidates": candidates
+        }
+        
+        response = requests.post(f"{ai_service_url.rstrip('/')}/check-duplicate", json=payload, timeout=60)
+        response.raise_for_status()
+        res_data = response.json()
+        
+        is_duplicate = res_data.get("isDuplicate", False)
+        duplicate_issue_id = res_data.get("duplicateIssueId")
+        similarity_score = res_data.get("similarityScore", 0.0)
+    except Exception as e:
+        print(f"Error checking duplicate during report creation: {e}")
+        is_duplicate = False
+        duplicate_issue_id = None
+        similarity_score = 0.0
 
     status = 'Duplicate' if is_duplicate else 'Reported'
 
