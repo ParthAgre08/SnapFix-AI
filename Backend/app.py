@@ -14,15 +14,55 @@ from services import report_service
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Firebase Admin (Only for Auth/Token Verification)
-cred_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'serviceAccountKey.json')
-if os.path.exists(cred_path):
-    cred = credentials.Certificate(cred_path)
+# # Initialize Firebase Admin (Only for Auth/Token Verification)
+# cred_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'serviceAccountKey.json')
+# if os.path.exists(cred_path):
+#     cred = credentials.Certificate(cred_path)
+#     if not firebase_admin._apps:
+#         firebase_admin.initialize_app(cred)
+#     print("Firebase Admin initialized successfully.")
+# else:
+#     print(f"Warning: Firebase credentials not found at {cred_path}. Token verification may fail.")
+
+# =============================================================================
+# Firebase Admin Initialization (Local + Render Compatible)
+# =============================================================================
+
+import json
+
+try:
     if not firebase_admin._apps:
-        firebase_admin.initialize_app(cred)
-    print("Firebase Admin initialized successfully.")
-else:
-    print(f"Warning: Firebase credentials not found at {cred_path}. Token verification may fail.")
+
+        # -----------------------------
+        # Option 1 : Render Environment Variable
+        # FIREBASE_SERVICE_ACCOUNT contains the full JSON
+        # -----------------------------
+        firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+
+        if firebase_json:
+            cred = credentials.Certificate(json.loads(firebase_json))
+            firebase_admin.initialize_app(cred)
+            print("Firebase Admin initialized from FIREBASE_SERVICE_ACCOUNT.")
+
+        else:
+            # -----------------------------
+            # Option 2 : Local Development
+            # -----------------------------
+            cred_path = os.getenv(
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "serviceAccountKey.json"
+            )
+
+            if os.path.exists(cred_path):
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred)
+                print("Firebase Admin initialized from serviceAccountKey.json.")
+
+            else:
+                print("Firebase Admin credentials not found. Running without Firebase Admin.")
+
+except Exception as e:
+    print(f"Firebase initialization failed: {e}")
 
 # Load the SentenceTransformer model for similarity matching
 print("Loading SentenceTransformer model...")
