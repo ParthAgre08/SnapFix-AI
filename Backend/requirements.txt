@@ -24,5 +24,3 @@ Pillow==10.4.0
 google-generativeai==0.8.5
 python-dotenv==1.0.1
 
-torch==2.5.1
-torchvision==0.20.1
