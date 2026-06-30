@@ -447,10 +447,21 @@ export default function Report() {
                   
                   {customImageFile ? (
                     <>
-                      <img src={customImageFile} alt="Preview" className="absolute inset-0 w-full h-full object-cover opacity-90 transition-transform duration-500 group-hover:scale-102" />
-                      <div className="absolute bottom-4 left-4 right-4 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-2xl p-3 flex items-center justify-between text-white">
+                      {/* Blurred background preview to fill space */}
+                      <img 
+                        src={customImageFile} 
+                        alt="" 
+                        className="absolute inset-0 w-full h-full object-cover opacity-20 blur-lg pointer-events-none scale-105" 
+                      />
+                      {/* Foreground centered image keeping its aspect ratio */}
+                      <img 
+                        src={customImageFile} 
+                        alt="Preview" 
+                        className="relative max-h-[80%] max-w-[90%] object-contain z-10 rounded-2xl border border-white/25 shadow-lg transition-transform duration-500 group-hover:scale-102 pointer-events-none" 
+                      />
+                      <div className="absolute bottom-3 left-4 right-4 bg-slate-950/85 backdrop-blur-md border border-white/10 rounded-2xl p-2.5 flex items-center justify-between text-white z-20 shadow-md">
                         <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-success" />
+                          <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
                           <span className="text-[10px] font-bold tracking-wide uppercase">Evidence Loaded</span>
                         </div>
                         <span className="text-[9px] text-slate-400">Click to replace file</span>
