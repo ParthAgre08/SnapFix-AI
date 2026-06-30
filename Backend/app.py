@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import firebase_admin
-from firebase_admin import credentials, auth
 import datetime
 import os
 import json
@@ -12,6 +10,14 @@ from services import report_service
 app = Flask(__name__)
 CORS(app)
 
+
+
+@app.route("/")
+def home():
+    return jsonify({
+        "status": "running",
+        "service": "SnapFix Backend"
+    }), 200
 # # Initialize Firebase Admin (Only for Auth/Token Verification)
 # cred_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'serviceAccountKey.json')
 # if os.path.exists(cred_path):
@@ -28,39 +34,6 @@ CORS(app)
 
 import json
 
-try:
-    if not firebase_admin._apps:
-
-        # -----------------------------
-        # Option 1 : Render Environment Variable
-        # FIREBASE_SERVICE_ACCOUNT contains the full JSON
-        # -----------------------------
-        firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
-
-        if firebase_json:
-            cred = credentials.Certificate(json.loads(firebase_json))
-            firebase_admin.initialize_app(cred)
-            print("Firebase Admin initialized from FIREBASE_SERVICE_ACCOUNT.")
-
-        else:
-            # -----------------------------
-            # Option 2 : Local Development
-            # -----------------------------
-            cred_path = os.getenv(
-                "GOOGLE_APPLICATION_CREDENTIALS",
-                "serviceAccountKey.json"
-            )
-
-            if os.path.exists(cred_path):
-                cred = credentials.Certificate(cred_path)
-                firebase_admin.initialize_app(cred)
-                print("Firebase Admin initialized from serviceAccountKey.json.")
-
-            else:
-                print("Firebase Admin credentials not found. Running without Firebase Admin.")
-
-except Exception as e:
-    print(f"Firebase initialization failed: {e}")
 
 
 
@@ -742,7 +715,10 @@ def community_comment():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+# if __name__ == '__main__':
+#     app.run(debug=True, port=5000)
 
 
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
